@@ -12,15 +12,15 @@ import numpy as np
 import pytest
 from pytest_mock import MockFixture
 
-from anemoi.training.data.multidomain import MultiDomainDataset
+from anemoi.training.data.base import AnemoiDataset
 
 
 class TestMultiDomain:
     """Test MultiDomainDataset instantiation and properties."""
 
     @pytest.fixture
-    def multi_domain(self, mocker: MockFixture) -> MultiDomainDataset:
-        """Fixture to provide a MultiDomainDataset instance with mocked datasets."""
+    def multi_domain(self, mocker: MockFixture) -> AnemoiDataset:
+        """Fixture to provide a AnemoiDataset instance with mocked datasets."""
         # Mock create_dataset to return mock datasets
         mock_dataset_a = mocker.MagicMock()
         mock_dataset_a.missing = set()
@@ -36,10 +36,14 @@ class TestMultiDomain:
 
         data_readers = {"dataset_a": mock_dataset_a, "dataset_b": mock_dataset_b}
         relative_date_indices = {"dataset_a": [0, 2, 6], "dataset_b": [0, 2, 6]}  # e.g. f([t, t-6h]) = t+12h
+        sample_strategy = "anemoi.training.data.multidomain_sampler.MultiDomainSampler"
+        return AnemoiDataset(
+            data_readers=data_readers,
+            relative_date_indices=relative_date_indices,
+            sample_strategy=sample_strategy,
+        )
 
-        return MultiDomainDataset(data_readers=data_readers, relative_date_indices=relative_date_indices)
-
-    def test_sharding(self, multi_domain: MultiDomainDataset) -> None:
+    def test_sharding(self, multi_domain: AnemoiDataset) -> None:
         """Test that sharding logic correctly partitions the dataset."""
         multi_domain.per_worker_init(n_workers=2, worker_id=0)
         expected_indices = {
@@ -47,9 +51,9 @@ class TestMultiDomain:
             "dataset_b": np.array([0, 1, 2, 3, 4, 5, 6]),
         }
         for key in expected_indices:
-            assert np.array_equal(multi_domain.chunk_index_range[key], expected_indices[key])
+            assert np.array_equal(multi_domain.sampler.chunk_index_range[key], expected_indices[key])
 
-    def test_valid_date_indices(self, multi_domain: MultiDomainDataset) -> None:
+    def test_valid_date_indices(self, multi_domain: AnemoiDataset) -> None:
         """Test that valid_date_indices returns a dictionary of indices from all datasets."""
         # relative_date_indices are: [0, 1, 2]
         # dataset_a has dates [0, 1, 2, ..., 29]
@@ -59,7 +63,7 @@ class TestMultiDomain:
         # dataset_b has indices [0, 11, ..., 22, 23], where 23 = 29 - max(data_relative_time_indices) = 29 - 6
 
         # Test valid_date_indices property
-        valid_indices = multi_domain.valid_date_indices
+        valid_indices = multi_domain.sampler.valid_date_indices
 
         # Should return a dictionary with concatenation [0, 11, 12, 13, ..., 22, 23]
         expected_indices = {
@@ -70,3 +74,17 @@ class TestMultiDomain:
         }
         for key in expected_indices:
             assert np.array_equal(valid_indices[key], expected_indices[key])
+
+    def test_get_sample(self, multi_domain: AnemoiDataset) -> None:
+        """Test that get_sample returns a dictionary of samples from all datasets."""
+        multi_domain.per_worker_init(n_workers=1, worker_id=0)
+        shuffled_indices = multi_domain.sampler.get_shuffled_chunk_indices()
+        sample = multi_domain.sampler.get_sample(shuffled_indices[0])
+        assert isinstance(sample, dict)
+        assert len(sample) == 1  # should return a sample from one dataset
+
+    def test_get_shuffled_chunk_indices(self, multi_domain: AnemoiDataset) -> None:
+        """Test that get_shuffled_chunk_indices returns shuffled indices when shuffle is True."""
+        multi_domain.per_worker_init(n_workers=1, worker_id=0)
+        shuffled_indices = multi_domain.sampler.get_shuffled_chunk_indices()
+        assert isinstance(shuffled_indices, np.ndarray)

@@ -14,15 +14,15 @@ import numpy as np
 import pytest
 from pytest_mock import MockFixture
 
-from anemoi.training.data.multidataset import MultiDataset
+from anemoi.training.data.base import AnemoiDataset
 
 
 class TestMultiDataset:
     """Test MultiDataset instantiation and properties."""
 
     @pytest.fixture
-    def multi_dataset(self, mocker: MockFixture) -> MultiDataset:
-        """Fixture to provide a MultiDataset instance with mocked datasets."""
+    def multi_dataset(self, mocker: MockFixture) -> AnemoiDataset:
+        """Fixture to provide a AnemoiDataset instance with mocked datasets."""
         # Mock create_dataset to return mock datasets
         mock_dataset_a = mocker.MagicMock()
         mock_dataset_a.missing = set()
@@ -38,10 +38,15 @@ class TestMultiDataset:
 
         data_readers = {"dataset_a": mock_dataset_a, "dataset_b": mock_dataset_b}
         relative_date_indices = {"dataset_a": [0, 2, 6], "dataset_b": [0, 2, 6]}  # e.g. f([t, t-6h]) = t+12h
+        sample_strategy = "anemoi.training.data.multidataset_sampler.MultiDatasetSampler"
 
-        return MultiDataset(data_readers=data_readers, relative_date_indices=relative_date_indices)
+        return AnemoiDataset(
+            data_readers=data_readers,
+            relative_date_indices=relative_date_indices,
+            sample_strategy=sample_strategy,
+        )
 
-    def test_valid_date_indices(self, multi_dataset: MultiDataset) -> None:
+    def test_valid_date_indices(self, multi_dataset: AnemoiDataset) -> None:
         """Test that valid_date_indices returns the intersection of indices from all datasets."""
         # relative_date_indices are: [0, 2, 6]
         # dataset_a|b has dates [0, 1, 2, ..., 29]
@@ -52,13 +57,13 @@ class TestMultiDataset:
         # intersection should be [0, 11, 12, 13, ..., 22, 23]
 
         # Test valid_date_indices property
-        valid_indices = multi_dataset.valid_date_indices
+        valid_indices = multi_dataset.sampler.valid_date_indices
 
         # Should return intersection [0, 11, 12, 13, ..., 22, 23]
         expected_indices = np.array([0, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
         assert np.array_equal(valid_indices, expected_indices)
 
-    def test_valid_date_indices_empty_dataset(self, multi_dataset: MultiDataset, mocker: MockFixture) -> None:
+    def test_valid_date_indices_empty_dataset(self, multi_dataset: AnemoiDataset, mocker: MockFixture) -> None:
         """Test that MultiDataset raises ValueError when a dataset has no valid indices."""
         data_readers = multi_dataset.data_readers
         relative_date_indices = {"dataset_a": [0, 2, 6], "dataset_b": [0, 2, 6]}
@@ -77,10 +82,14 @@ class TestMultiDataset:
         empty_dataset = data_readers["dataset_b"]
         err_msg = f"No valid date indices found for data reader 'dataset_b': {empty_dataset}"
         with pytest.raises(ValueError, match=re.escape(err_msg)):
-            MultiDataset(data_readers=data_readers, relative_date_indices=relative_date_indices)
+            AnemoiDataset(
+                data_readers=data_readers,
+                relative_date_indices=relative_date_indices,
+                sample_strategy="anemoi.training.data.multidataset_sampler.MultiDatasetSampler",
+            )
 
-    def test_valid_date_indices_empty_intersection(self, multi_dataset: MultiDataset, mocker: MockFixture) -> None:
-        """Test that MultiDataset raises ValueError when intersection of valid indices is empty."""
+    def test_valid_date_indices_empty_intersection(self, multi_dataset: AnemoiDataset, mocker: MockFixture) -> None:
+        """Test that AnemoiDataset raises ValueError when intersection of valid indices is empty."""
         data_readers = multi_dataset.data_readers
         relative_date_indices = {"dataset_a": [0, 2, 6], "dataset_b": [0, 2, 6]}
 
@@ -97,6 +106,10 @@ class TestMultiDataset:
             ],
         )
 
-        # Constructing MultiDataset should raise ValueError
+        # Constructing AnemoiDataset should raise ValueError
         with pytest.raises(ValueError, match="No valid date indices found after intersection across all datasets"):
-            MultiDataset(data_readers=data_readers, relative_date_indices=relative_date_indices)
+            AnemoiDataset(
+                data_readers=data_readers,
+                relative_date_indices=relative_date_indices,
+                sample_strategy="anemoi.training.data.multidataset_sampler.MultiDatasetSampler",
+            )

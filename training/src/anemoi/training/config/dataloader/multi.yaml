@@ -38,8 +38,9 @@ limit_batches:
 # choose between "multidataset" and "multidomain" dataloader strategies
 # "multidataset" returns a dictionary of dataset samples and synchronizes them by time index. {a: tensor_a, b: tensor_b, ...}
 # "multidomain" returns a tuple of dataset sample and does not require synchronization. (tensor_a, domain_a)
-strategy:
-  _target_: anemoi.training.data.multidataset.MultiDataset
+# strategy:
+#   _target_: anemoi.training.data.multidataset.MultiDataset
+sampler: anemoi.training.data.sampler.MultiDatasetSampler
 
 # ============
 # Multi-Dataset Configuration
