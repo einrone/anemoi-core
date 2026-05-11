@@ -9,8 +9,8 @@
 
 import datetime
 import logging
+import os
 from abc import ABC
-from abc import abstractmethod
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import numpy as np
 
+import torch
+from hydra.utils import instantiate
 from rich.console import Console
 from rich.tree import Tree
 from torch.utils.data import IterableDataset
@@ -25,6 +27,7 @@ from torch.utils.data import IterableDataset
 from anemoi.models.distributed.balanced_partition import get_balanced_partition_sizes
 from anemoi.models.distributed.balanced_partition import get_partition_range
 from anemoi.training.data.data_reader import BaseAnemoiReader
+from anemoi.training.utils.time_indices import TimeIndices
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +38,8 @@ class AnemoiDataset(IterableDataset, ABC):
     def __init__(
         self,
         data_readers: dict[str, BaseAnemoiReader],
+        relative_date_indices: dict[str, TimeIndices],
+        sample_strategy: "str",
         shuffle: bool = True,
         label: str = "multi",
     ) -> None:
@@ -55,6 +60,14 @@ class AnemoiDataset(IterableDataset, ABC):
         self.shuffle = shuffle
         self.dataset_names = list(data_readers.keys())
         self._lazy_init_model_and_reader_group_info()
+        self.sampler = instantiate(
+            {"_target_": sample_strategy, "_convert_": "object"},
+            data_readers=data_readers,
+            relative_date_indices=relative_date_indices,
+            shuffle=shuffle,
+            label=label,
+            shard_shapes=self.shard_shapes,
+        )
 
     def _lazy_init_model_and_reader_group_info(self) -> None:
         """Lazy initialize model and reader group info."""
@@ -223,9 +236,15 @@ class AnemoiDataset(IterableDataset, ABC):
             self.sample_comm_num_groups,
         )
 
-    @abstractmethod
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
-        """Initialize all data readers for this worker. To be overwritten by subclasses."""
+        """Initialize all data readers for this worker based on the sampling strategy."""
+        self.sampler.per_worker_init(
+            n_workers=n_workers,
+            worker_id=worker_id,
+            sample_comm_num_groups=self.sample_comm_num_groups,
+            sample_comm_group_id=self.sample_comm_group_id,
+            model_comm_group_id=self.model_comm_group_id,
+        )
 
     @cached_property
     def shard_shapes(self) -> dict[str, list]:
@@ -243,13 +262,31 @@ class AnemoiDataset(IterableDataset, ABC):
         )
         return slice(start, end)
 
-    @abstractmethod
-    def get_sample(self, index: int) -> None:
-        """Get a sample from data readers at the specified index. To be overwritten by subclasses."""
+    def __iter__(self) -> tuple[torch.Tensor, str]:
+        """Return an iterator that yields a tuple torch.Tensor and its corresponding domain name.
 
-    @abstractmethod
-    def __iter__(self) -> None:
-        """Return an iterator over the dataset(s). To be overwritten by subclasses."""
+        Returns
+        -------
+        tuple[torch.Tensor, str]
+            A tuple containing the tensor sample and its corresponding domain name
+        """
+        shuffled_chunk_indices = self.sampler.get_shuffled_chunk_indices()
+        LOGGER.debug(
+            (
+                "Worker pid %d, label %s, worker id %d, global_rank %d, "
+                "model comm group %d, group_rank %d, seed comm group id %d"
+            ),
+            os.getpid(),
+            self.label,
+            self.worker_id,
+            self.global_rank,
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
+            self.sample_comm_group_id,
+        )
+        # TODO(): improve this...
+        for i in shuffled_chunk_indices:
+            yield self.sampler.get_sample(i)
 
     def __repr__(self) -> str:
         console = Console(record=True, width=120)
