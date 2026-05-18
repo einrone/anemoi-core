@@ -1,0 +1,43 @@
+defaults:
+- data: multi
+- dataloader: multi
+- diagnostics: evaluation_multi
+- system: example
+- graph: multi
+- model: graphtransformer
+- task: forecaster
+- training: multi
+- _self_
+
+config_validation: True
+
+data:
+  resolution: o96
+
+training:
+  encoder_0:
+    era5:
+      dataset: ${system.input.dataset}
+      frequency: ${data.frequency}
+    meps:
+      dataset: ${system.input.dataset_b}
+      frequency: ${data.frequency}
+  encoder_1:
+    era5:
+      dataset: ${system.input.dataset}
+      frequency: ${data.frequency}
+    arome-arctic:
+      dataset: ${system.input.dataset_b}
+      frequency: ${data.frequency}
+
+  hardware:
+    accelerator: auto
+    num_gpus_per_node: 1
+    num_nodes: 1
+    num_gpus_per_model: 1
+
+diagnostics:
+  log:
+    mlflow:
+      enabled: False
+      tracking_uri: None

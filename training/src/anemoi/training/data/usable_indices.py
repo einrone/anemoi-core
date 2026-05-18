@@ -57,6 +57,37 @@ def compute_valid_data_indices(
     return valid_date_indices_intersection
 
 
+def compute_union_valid_data_indices(
+    data_readers: dict[str, "BaseAnemoiReader"],
+    relative_date_indices: dict[str, np.ndarray | list[int]],
+) -> np.ndarray:
+    """Return valid date indices.
+
+    A date t is valid if we can sample the elements t + i
+    for every relative_date_index i across all data readers.
+
+    Returns the union of valid indices from all data readers.
+    """
+    valid_date_indices_union = None
+    for dataset_name, ds in data_readers.items():
+        valid_date_indices = get_usable_indices(
+            ds.missing,
+            len(ds.dates),
+            relative_date_indices[dataset_name],
+            ds.trajectory_ids if ds.has_trajectories else None,
+        )
+        if valid_date_indices_union is None:
+            valid_date_indices_union = valid_date_indices
+        else:
+            valid_date_indices_union = np.union1d(valid_date_indices_union, valid_date_indices)
+
+        LOGGER.info("Data reader '%s' has %d valid indices", dataset_name, len(valid_date_indices))
+
+    LOGGER.info("MultiDataset has %d valid indices after union.", len(valid_date_indices_union))
+
+    return np.array(sorted(valid_date_indices_union))
+
+
 def get_usable_indices(
     missing_indices: set[int],
     series_length: int,
