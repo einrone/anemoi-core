@@ -8,35 +8,40 @@
 # nor does it submit to any jurisdiction.
 
 import datetime
+import itertools
 import logging
+import os
+import random
 from abc import ABC
-from abc import abstractmethod
 from functools import cached_property
-from typing import TYPE_CHECKING
 
-# Move third-party import inside this block
-if TYPE_CHECKING:
-    import numpy as np
-
+import numpy as np
+import torch
 from rich.console import Console
 from rich.tree import Tree
 from torch.utils.data import IterableDataset
 
+from anemoi.models.distributed.balanced_partition import get_balanced_partition_range
 from anemoi.models.distributed.balanced_partition import get_balanced_partition_sizes
 from anemoi.models.distributed.balanced_partition import get_partition_range
 from anemoi.training.data.data_reader import BaseAnemoiReader
+from anemoi.training.data.usable_indices import compute_valid_data_indices
+from anemoi.training.utils.seeding import get_base_seed
+from anemoi.training.utils.time_indices import TimeIndices
+from anemoi.training.utils.time_indices import normalize_time_indices
+from anemoi.training.utils.time_indices import offset_time_indices
 
 LOGGER = logging.getLogger(__name__)
 
 
-class AnemoiDataset(IterableDataset, ABC):
+class NativeGridDataset(IterableDataset, ABC):
     """Base Anemoi Datasets torch dataset class."""
 
     def __init__(
         self,
         data_readers: dict[str, BaseAnemoiReader],
+        relative_date_indices: dict[str, TimeIndices],
         shuffle: bool = True,
-        label: str = "multi",
     ) -> None:
         """Initialize multi-dataset with synchronized data readers.
 
@@ -47,14 +52,51 @@ class AnemoiDataset(IterableDataset, ABC):
             Format: {"dataset_a": data_reader_a, "dataset_b": data_reader_b, ...}
         shuffle : bool, optional
             Shuffle batches, by default True
-        label : str, optional
-            label for the dataset, by default "multi"
         """
         self.data_readers = data_readers
-        self.label = label
         self.shuffle = shuffle
         self.dataset_names = list(data_readers.keys())
         self._lazy_init_model_and_reader_group_info()
+        self._init_valid_date_indices()
+
+        # Normalize the date indices to use slices where possible, which can improve downstream indexing performance.
+        self.relative_date_indices = {
+            name: normalize_time_indices(indices) for name, indices in relative_date_indices.items()
+        }
+        LOGGER.info("valid date indices: %s", self.valid_date_indices)
+        self.n_samples_per_worker = {}  # overwrite base to empty dict
+        self.chunk_index_range = {}  # overwrite base to empty dict
+
+    def _init_valid_date_indices(self) -> None:
+        """Get valid date indices for each dataset."""
+        # get dataset labels, encoder labels
+        self.dataset_labels = list(self.data_readers.keys())
+        encoder_labels = {
+            self.data_readers[dataset_label]["dataset"].get("encoder") for dataset_label in self.dataset_labels
+        }
+
+        # Group datasets by encoder, will look like: {0: [dataset0], 1: [dataset1, dataset2]}
+        datasets_per_encoder = {encoder_label: [] for encoder_label in encoder_labels}
+        for encoder_label in encoder_labels:
+            datasets_per_encoder[encoder_label] = [
+                dataset_label
+                for dataset_label in self.dataset_labels
+                if self.data_readers[dataset_label]["dataset"].get("encoder") == encoder_label
+            ]
+
+        # Create groups of datasets that will be sampled together
+        groups = list(itertools.product(*datasets_per_encoder.values()))
+        self.groups_dict = {"group_" + str(i): group for i, group in enumerate(groups)}
+        self.group_labels = list(self.groups_dict.keys())
+
+        # Compute valid date indices for each group of datasets
+        self.valid_date_indices = {
+            group: compute_valid_data_indices(
+                {dataset_label: self.data_readers[dataset_label]["dataset"] for dataset_label in datasets_in_group},
+                self.relative_date_indices,
+            )
+            for group, datasets_in_group in self.groups_dict.items()
+        }
 
     def _lazy_init_model_and_reader_group_info(self) -> None:
         """Lazy initialize model and reader group info."""
@@ -223,9 +265,57 @@ class AnemoiDataset(IterableDataset, ABC):
             self.sample_comm_num_groups,
         )
 
-    @abstractmethod
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
-        """Initialize all data readers for this worker. To be overwritten by subclasses."""
+        """Initialize a specific worker, based on the valid date indices.
+
+        Args:
+            n_workers : int
+                The total number of workers.
+            worker_id : int
+                The ID of the current worker (0-indexed).
+            sample_comm_num_groups : int
+                The number of sample communication groups.
+            sample_comm_group_id : int
+                The ID of the sample communication group.
+            model_comm_group_id : int
+                The ID of the model communication group.
+
+        Returns
+        -------
+            None
+        """
+        self.worker_id = worker_id
+        self.n_samples_per_worker = {}
+        for group in self.group_labels:
+            shard_size = len(self.valid_date_indices[group]) // self.sample_comm_num_groups
+            shard_start = self.sample_comm_group_id * shard_size
+
+            self.n_samples_per_worker[group] = shard_size // n_workers
+            low, high = get_balanced_partition_range(shard_size, n_workers, worker_id, offset=shard_start)
+
+            self.chunk_index_range[group] = np.arange(low, high, dtype=np.uint32)
+
+            LOGGER.info(
+                "Worker %d (pid %d, model comm group %d)  has low/high range %d / %d",
+                worker_id,
+                os.getpid(),
+                self.model_comm_group_id,
+                low,
+                high,
+            )
+
+            base_seed = get_base_seed()
+            torch.manual_seed(base_seed)
+            random.seed(base_seed)
+            self.rng = np.random.default_rng(seed=base_seed)
+            sanity_rnd = self.rng.random(1)[0]
+            LOGGER.info(
+                ("Worker %d (%s, pid %d, base_seed %d, sanity rnd %f)"),
+                self.worker_id,
+                os.getpid(),
+                base_seed,
+                sanity_rnd,
+            )
 
     @cached_property
     def shard_shapes(self) -> dict[str, list]:
@@ -243,13 +333,46 @@ class AnemoiDataset(IterableDataset, ABC):
         )
         return slice(start, end)
 
-    @abstractmethod
-    def get_sample(self, index: int) -> None:
-        """Get a sample from data readers at the specified index. To be overwritten by subclasses."""
+    def get_sample(self, index: tuple[str, int]) -> torch.Tensor:
+        LOGGER.debug("Getting sample for index %s", index)
+        group_name, i = index
+        datasets_in_group = self.groups_dict[group_name]
+        x = {}
+        for name in datasets_in_group:
+            dataset = self.data_readers[name]["dataset"]
+            time_step = offset_time_indices(int(i), self.relative_date_indices[name])
+            if self.shard_shapes is not None and self.shard_shapes[name] is not None:
+                start, end = get_partition_range(self.shard_shapes[name], self.reader_group_rank)
+                grid_indices = slice(start, end)
+            else:
+                grid_indices = slice(None)
+            x[name] = dataset.get_sample(time_step, grid_indices)
+        return x
 
-    @abstractmethod
     def __iter__(self) -> None:
-        """Return an iterator over the dataset(s). To be overwritten by subclasses."""
+        """Return an iterator that yields a tuple torch.Tensor and its corresponding domain name.
+
+        Returns
+        -------
+        tuple[torch.Tensor, str]
+            A tuple containing the tensor sample and its corresponding domain name
+        """
+        shuffled_chunk_indices = self.sampler.get_shuffled_chunk_indices()
+        LOGGER.debug(
+            (
+                "Worker pid %d, label %s, worker id %d, global_rank %d, "
+                "model comm group %d, group_rank %d, seed comm group id %d"
+            ),
+            os.getpid(),
+            self.worker_id,
+            self.global_rank,
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
+            self.sample_comm_group_id,
+        )
+
+        for i in shuffled_chunk_indices:
+            yield self.sampler.get_sample(i)
 
     def __repr__(self) -> str:
         console = Console(record=True, width=120)
