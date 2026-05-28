@@ -57,13 +57,13 @@ class NativeGridDataset(IterableDataset, ABC):
         self.shuffle = shuffle
         self.dataset_names = list(data_readers.keys())
         self._lazy_init_model_and_reader_group_info()
+        self.relative_date_indices = relative_date_indices
         self._init_valid_date_indices()
 
         # Normalize the date indices to use slices where possible, which can improve downstream indexing performance.
         self.relative_date_indices = {
-            name: normalize_time_indices(indices) for name, indices in relative_date_indices.items()
+            name: normalize_time_indices(indices) for name, indices in self.relative_date_indices.items()
         }
-        LOGGER.info("valid date indices: %s", self.valid_date_indices)
         self.n_samples_per_worker = {}  # overwrite base to empty dict
         self.chunk_index_range = {}  # overwrite base to empty dict
 
@@ -71,9 +71,7 @@ class NativeGridDataset(IterableDataset, ABC):
         """Get valid date indices for each dataset."""
         # get dataset labels, encoder labels
         self.dataset_labels = list(self.data_readers.keys())
-        encoder_labels = {
-            self.data_readers[dataset_label]["dataset"].get("encoder") for dataset_label in self.dataset_labels
-        }
+        encoder_labels = {self.data_readers[dataset_label].get("encoder") for dataset_label in self.dataset_labels}
 
         # Group datasets by encoder, will look like: {0: [dataset0], 1: [dataset1, dataset2]}
         datasets_per_encoder = {encoder_label: [] for encoder_label in encoder_labels}
@@ -81,7 +79,7 @@ class NativeGridDataset(IterableDataset, ABC):
             datasets_per_encoder[encoder_label] = [
                 dataset_label
                 for dataset_label in self.dataset_labels
-                if self.data_readers[dataset_label]["dataset"].get("encoder") == encoder_label
+                if self.data_readers[dataset_label].get("encoder") == encoder_label
             ]
 
         # Create groups of datasets that will be sampled together
@@ -90,13 +88,16 @@ class NativeGridDataset(IterableDataset, ABC):
         self.group_labels = list(self.groups_dict.keys())
 
         # Compute valid date indices for each group of datasets
-        self.valid_date_indices = {
-            group: compute_valid_data_indices(
+        self.valid_date_indices = {}
+        for group, datasets_in_group in self.groups_dict.items():
+            group_valid_date_indices = compute_valid_data_indices(
                 {dataset_label: self.data_readers[dataset_label]["dataset"] for dataset_label in datasets_in_group},
                 self.relative_date_indices,
             )
-            for group, datasets_in_group in self.groups_dict.items()
-        }
+            if len(group_valid_date_indices) > 0:
+                self.valid_date_indices[group] = group_valid_date_indices
+
+        assert len(self.valid_date_indices) > 0, "No valid date indices found for any group of datasets."
 
     def _lazy_init_model_and_reader_group_info(self) -> None:
         """Lazy initialize model and reader group info."""
@@ -310,7 +311,7 @@ class NativeGridDataset(IterableDataset, ABC):
             self.rng = np.random.default_rng(seed=base_seed)
             sanity_rnd = self.rng.random(1)[0]
             LOGGER.info(
-                ("Worker %d (%s, pid %d, base_seed %d, sanity rnd %f)"),
+                ("Worker %d (pid %d, base_seed %d, sanity rnd %f)"),
                 self.worker_id,
                 os.getpid(),
                 base_seed,
@@ -332,6 +333,42 @@ class NativeGridDataset(IterableDataset, ABC):
             partition_id=reader_group_rank,
         )
         return slice(start, end)
+
+    def get_shuffled_chunk_indices(self) -> list[tuple[str, int]]:
+        """Get the shuffled chunk indices from the dataset.
+
+        Returns
+        -------
+            list[tuple[str, int]]: A list of tuples containing the domain name and index for each shuffled chunk.
+        """
+        if self.shuffle:
+            shuffled_chunk_indices = {
+                group: self.rng.choice(
+                    indices,
+                    size=len(indices),
+                    replace=False,
+                )[self.chunk_index_range[group]]
+                for group, indices in self.valid_date_indices.items()
+            }
+
+            labeled_samples_and_indexes = [
+                (group, i) for group, indices in shuffled_chunk_indices.items() for i in indices
+            ]
+
+            labeled_samples = self.rng.choice(
+                labeled_samples_and_indexes,
+                size=len(labeled_samples_and_indexes),
+                replace=False,
+            )
+        else:
+            shuffled_chunk_indices = {
+                group: indices[self.chunk_index_range[group]] for group, indices in self.valid_date_indices.items()
+            }
+            labeled_samples = [
+                (str(group), int(i.item())) for group, inds in shuffled_chunk_indices.items() for i in inds
+            ]
+
+        return labeled_samples
 
     def get_sample(self, index: tuple[str, int]) -> torch.Tensor:
         LOGGER.debug("Getting sample for index %s", index)
@@ -357,7 +394,7 @@ class NativeGridDataset(IterableDataset, ABC):
         tuple[torch.Tensor, str]
             A tuple containing the tensor sample and its corresponding domain name
         """
-        shuffled_chunk_indices = self.sampler.get_shuffled_chunk_indices()
+        shuffled_chunk_indices = self.get_shuffled_chunk_indices()
         LOGGER.debug(
             (
                 "Worker pid %d, label %s, worker id %d, global_rank %d, "
@@ -372,7 +409,7 @@ class NativeGridDataset(IterableDataset, ABC):
         )
 
         for i in shuffled_chunk_indices:
-            yield self.sampler.get_sample(i)
+            yield self.get_sample(i)
 
     def __repr__(self) -> str:
         console = Console(record=True, width=120)

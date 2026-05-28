@@ -50,39 +50,48 @@ class TestMixedDataset:
             "dataset_b": [0, 2, 6],
             "dataset_c": [0, 2, 6],
         }  # e.g. f([t, t-6h]) = t+12h
-        sample_strategy = "anemoi.training.data.sharded_mixed_sampler.MixedSampler"
         return NativeGridDataset(
             data_readers=data_readers,
             relative_date_indices=relative_date_indices,
-            sample_strategy=sample_strategy,
         )
 
     def test_valid_date_indices(self, multi_domain: NativeGridDataset) -> None:
-        merged_valid_date_indices = multi_domain.sampler.merged_valid_date_indices
-        expected_merged_valid_date_indices = {"group_0": [0, 1], "group_1": [2, 3]}
-        assert np.array_equal(merged_valid_date_indices, expected_merged_valid_date_indices)
+        valid_date_indices = multi_domain.valid_date_indices
+        expected_valid_date_indices = {"group_0": np.array([0, 1]), "group_1": np.array([2, 3])}
+        for group in valid_date_indices:
+            assert np.array_equal(
+                valid_date_indices[group],
+                expected_valid_date_indices[group],
+            ), f"Valid date indices for {group} do not match expected values"
 
     def test_sharding(self, multi_domain: NativeGridDataset) -> None:
         """Test that sharding logic correctly partitions the dataset."""
         multi_domain.per_worker_init(n_workers=2, worker_id=0)
-        expected_indices = {"group_0": [0], "group_1": [2]}  # worker 0 gets the first half of the data
-        assert np.array_equal(multi_domain.sampler.chunk_index_range, expected_indices)
+        expected_indices = {
+            "group_0": np.array([0]),
+            "group_1": np.array([0]),
+        }  # worker 0 gets the first half of the data
+        for group in multi_domain.chunk_index_range:
+            assert np.array_equal(
+                multi_domain.chunk_index_range[group],
+                expected_indices[group],
+            ), f"Chunk index range for {group} does not match expected values for worker 0"
 
     def test_get_shuffled_chunk_indices(self, multi_domain: NativeGridDataset) -> None:
         """Test that get_shuffled_chunk_indices returns shuffled indices when shuffle is True."""
         multi_domain.per_worker_init(n_workers=1, worker_id=0)
-        shuffled_indices = multi_domain.sampler.get_shuffled_chunk_indices()
+        shuffled_indices = multi_domain.get_shuffled_chunk_indices()
         assert isinstance(shuffled_indices, np.ndarray)
         assert len(shuffled_indices) == 4  # should return all indices from both groups
         # Check that the indices are shuffled and are all present
-        original_indices = [("group_0", 0), ("group_0", 1), ("group_1", 2), ("group_1", 3)]
-        for idx in shuffled_indices:
-            assert idx in original_indices
+        original_indices = [["group_0", "0"], ["group_0", "1"], ["group_1", "2"], ["group_1", "3"]]
+        for idx in original_indices:
+            assert idx in shuffled_indices.tolist(), f"Original index {idx} is missing from shuffled indices"
 
     def test_get_sample(self, multi_domain: NativeGridDataset) -> None:
         """Test that get_sample returns a dictionary of samples from all datasets."""
         multi_domain.per_worker_init(n_workers=2, worker_id=0)
-        shuffled_indices = multi_domain.sampler.get_shuffled_chunk_indices()
-        sample = multi_domain.sampler.get_sample(shuffled_indices[0])
+        shuffled_indices = multi_domain.get_shuffled_chunk_indices()
+        sample = multi_domain.get_sample(shuffled_indices[0])
         assert isinstance(sample, dict)
         assert len(sample) == 2  # should return a sample from two encoders

@@ -12,14 +12,12 @@ import logging
 from functools import cached_property
 
 import pytorch_lightning as pl
-from hydra.utils import instantiate
 from torch.utils.data import DataLoader
 
 from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.utils.config import get_multiple_datasets_config
 from anemoi.training.data.data_reader import create_dataset
-from anemoi.training.data.multidataset import MultiDataset
-from anemoi.training.data.multidomain import MultiDomainDataset
+from anemoi.training.data.dataset import NativeGridDataset
 from anemoi.training.data.relative_time_indices import compute_relative_date_indices
 from anemoi.training.schemas.base_schema import BaseSchema
 from anemoi.training.tasks.base import BaseTask
@@ -108,17 +106,17 @@ class AnemoiDatasetsDataModule(pl.LightningDataModule):
         return indices
 
     @cached_property
-    def ds_train(self) -> MultiDataset:
+    def ds_train(self) -> NativeGridDataset:
         """Create multi-dataset for training."""
         return self._get_dataset(self.train_dataloader_config, shuffle=True, label="training")
 
     @cached_property
-    def ds_valid(self) -> MultiDataset:
+    def ds_valid(self) -> NativeGridDataset:
         """Create multi-dataset for validation."""
         return self._get_dataset(self.valid_dataloader_config, shuffle=False, label="validation")
 
     @cached_property
-    def ds_test(self) -> MultiDataset:
+    def ds_test(self) -> NativeGridDataset:
         """Create multi-dataset for testing."""
         return self._get_dataset(self.test_dataloader_config, shuffle=False, label="test")
 
@@ -127,19 +125,18 @@ class AnemoiDatasetsDataModule(pl.LightningDataModule):
         config: dict[str, dict],
         shuffle: bool = True,
         label: str = "generic",
-    ) -> MultiDataset | MultiDomainDataset:
+    ) -> NativeGridDataset:
         data_readers = {name: create_dataset(data_reader, task=self.task) for name, data_reader in config.items()}
         relative_date_indices = compute_relative_date_indices(self.task, data_readers, mode=label)
 
-        return instantiate(
-            self.config.dataloader.stategy,
+        return NativeGridDataset(
             data_readers=data_readers,
             relative_date_indices=relative_date_indices,
             shuffle=shuffle,
             label=label,
         )
 
-    def _get_dataloader(self, ds: MultiDataset, stage: str) -> DataLoader:
+    def _get_dataloader(self, ds: NativeGridDataset, stage: str) -> DataLoader:
         """Create DataLoader for multi-dataset."""
         assert stage in {"training", "validation", "test"}
 
