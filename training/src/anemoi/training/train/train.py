@@ -41,6 +41,7 @@ from anemoi.training.tasks.base import BaseTask
 from anemoi.training.utils.checkpoint import freeze_submodule_by_name
 from anemoi.training.utils.checkpoint import transfer_learning_loading
 from anemoi.training.utils.jsonify import map_config_to_primitives
+from anemoi.training.utils.process_configs import ProcessConfigs
 from anemoi.training.utils.seeding import get_base_seed
 from anemoi.utils.provenance import gather_provenance_info
 
@@ -65,6 +66,13 @@ class AnemoiTrainer(ABC):
         # This can increase performance (and TensorCore usage, where available).
         torch.set_float32_matmul_precision("high")
         # Resolve the config to avoid shenanigans with lazy loading
+        hectometric = getattr(config.dataloader, "hectometric", False)
+        if hectometric:
+            LOGGER.info("Dynamic mode enabled.")
+
+            pc = ProcessConfigs(base_config=config, hectometric=hectometric)
+            pc.process
+            config = pc.update()
 
         if config.config_validation:
             OmegaConf.resolve(config)
@@ -174,15 +182,16 @@ class AnemoiTrainer(ABC):
             graph_filename = Path(graph_filename)
 
             # Try loading existing
-            if graph_filename.exists() and not self.config.graph.overwrite:
+            if graph_filename.exists() and not self.config.graph.overwrite and graph_filename.endswith(".pt"):
                 from anemoi.graphs.utils import get_distributed_device
 
                 LOGGER.info("Loading graph data from %s", graph_filename)
                 return torch.load(graph_filename, map_location=get_distributed_device(), weights_only=False)
+            # Assume the filename is a path: return path for graph provider
+            return graph_filename
 
             # TODO(): We could add some functionality to load partial graphs here, and compute the rest from the config.
-        else:
-            graph_filename = None
+        graph_filename = None
 
         # Create new graph
         from anemoi.graphs.create import GraphCreator
