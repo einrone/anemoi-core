@@ -12,10 +12,9 @@ import pytest
 import torch
 from omegaconf import DictConfig
 
-from anemoi.training.losses import AlmostFairKernelCRPS
+from anemoi.training.losses import CRPS
 from anemoi.training.losses import FourierCorrelationLoss
 from anemoi.training.losses import HuberLoss
-from anemoi.training.losses import KernelCRPS
 from anemoi.training.losses import LogCoshLoss
 from anemoi.training.losses import LogSpectralDistance
 from anemoi.training.losses import MAELoss
@@ -29,7 +28,7 @@ from anemoi.training.losses.base import BaseLoss
 from anemoi.training.losses.base import FunctionalLoss
 from anemoi.training.utils.enums import TensorDim
 
-losses = [MSELoss, HuberLoss, MAELoss, RMSELoss, LogCoshLoss, KernelCRPS, AlmostFairKernelCRPS, WeightedMSELoss]
+losses = [MSELoss, HuberLoss, MAELoss, RMSELoss, LogCoshLoss, CRPS, WeightedMSELoss]
 spectral_losses = [SpectralL2Loss, SpectralCRPSLoss, FourierCorrelationLoss, LogSpectralDistance]
 losses += spectral_losses
 
@@ -41,6 +40,47 @@ losses += spectral_losses
 def test_manual_init(loss_cls: type[BaseLoss]) -> None:
     loss = loss_cls(x_dim=4, y_dim=4) if loss_cls in spectral_losses else loss_cls()
     assert isinstance(loss, BaseLoss)
+
+
+def _expected_crps(preds: torch.Tensor, targets: torch.Tensor, alpha: float) -> torch.Tensor:
+    ens_size = preds.shape[-1]
+    mae = torch.mean(torch.abs(targets[..., None] - preds), dim=-1)
+    pair_sum = torch.zeros_like(mae)
+    for i in range(ens_size - 1):
+        pair_sum += torch.sum(torch.abs(preds[..., i].unsqueeze(-1) - preds[..., i + 1 :]), dim=-1)
+    coef = -(alpha / (ens_size * (ens_size - 1)) + (1.0 - alpha) / (ens_size**2))
+    return mae + coef * pair_sum
+
+
+def test_crps_defaults_to_almost_fair_stable_backend() -> None:
+    loss = CRPS()
+    assert loss.alpha == 0.95
+    assert loss.backend == "stable"
+    assert loss.name == "crps0.95"
+
+
+@pytest.mark.parametrize("alpha", [0.0, 0.5, 0.95, 1.0])
+def test_crps_backends_match_expected_formula(alpha: float) -> None:
+    preds = torch.randn(2, 2, 3, 4, 5, dtype=torch.float64)
+    targets = torch.randn(2, 2, 3, 4, dtype=torch.float64)
+
+    expected = _expected_crps(preds, targets, alpha)
+    naive = CRPS(alpha=alpha, backend="naive")._kernel_crps(preds, targets)
+    stable = CRPS(alpha=alpha, backend="stable")._kernel_crps(preds, targets)
+
+    torch.testing.assert_close(naive, expected)
+    torch.testing.assert_close(stable, expected)
+
+
+@pytest.mark.parametrize("alpha", [-0.1, 1.1])
+def test_crps_rejects_invalid_alpha(alpha: float) -> None:
+    with pytest.raises(ValueError, match="alpha must be in the range"):
+        CRPS(alpha=alpha)
+
+
+def test_crps_rejects_invalid_backend() -> None:
+    with pytest.raises(ValueError, match="Unknown CRPS backend"):
+        CRPS(backend="unknown")  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -484,13 +524,6 @@ def test_octahedral_sht_loss() -> None:
         _ = loss(pred_wrong, target_wrong, squash=True)
 
 
-def _expected_octahedral_points(truncation: int) -> int:
-    # full globe reduced-octahedral points for ecTrans definition
-    # NH lons: 20 + 4*i, i=0..T  => sum_NH = 2*(T+1)*(T+10)
-    # full globe doubles:        => 4*(T+1)*(T+10)
-    return 4 * (truncation + 1) * (truncation + 10)
-
-
 def test_spectral_crps_fft_and_dct() -> None:
     bs, ens, nvars = 2, 5, 3
     x_dim, y_dim = 8, 6
@@ -526,7 +559,6 @@ def test_spectral_crps_with_target_without_ensemble_dim() -> None:
 
     pred = torch.randn(bs, 1, ens, grid, nvars)
     target = torch.randn(bs, 1, grid, nvars)
-    target[..., 0, 0] = torch.nan
 
     loss = get_loss_function(
         DictConfig(
@@ -535,7 +567,6 @@ def test_spectral_crps_with_target_without_ensemble_dim() -> None:
                 "transform": "fft2d",
                 "x_dim": x_dim,
                 "y_dim": y_dim,
-                "ignore_nans": True,
                 "scalers": [],
             },
         ),
@@ -543,55 +574,35 @@ def test_spectral_crps_with_target_without_ensemble_dim() -> None:
 
     out = loss(pred, target, squash=False)
     assert out.shape == (nvars,), "squash=False should return per-variable CRPS"
-    assert torch.isfinite(out).all(), "Expected finite loss with ignore_nans=True"
 
     out_total = loss(pred, target, squash=True)
     assert out_total.numel() == 1, "squash=True should return scalar CRPS"
-    assert torch.isfinite(out_total).all(), "Expected finite scalar loss with ignore_nans=True"
 
 
-def test_spectral_crps_octahedral_irregular_grid_ignore_nans() -> None:
-    def _octahedral_expected_points(nlat: int) -> int:
-        half = [20 + 4 * i for i in range(nlat // 2)]
-        return int(sum(half + half[::-1]))
-
-    bs, ens, nvars = 2, 4, 2
-    nlat = 8
-    points = _octahedral_expected_points(nlat)
-
-    pred = torch.randn(bs, 1, ens, points, nvars)
-    target = torch.randn(bs, 1, 1, points, nvars)
+def test_mse_ignore_nans() -> None:
+    """MSELoss should ignore NaNs with ignore_nans=True."""
+    pred = torch.randn(3, 4, 5, 6, 7)
+    pred.requires_grad_()
+    target = torch.randn(3, 4, 5, 6, 7)
     target[..., 0, 0] = torch.nan
 
-    loss_no_ignore = get_loss_function(
-        DictConfig(
-            {
-                "_target_": "anemoi.training.losses.spectral.SpectralCRPSLoss",
-                "transform": "octahedral_sht",
-                "nlat": nlat,
-                "ignore_nans": False,
-                "scalers": [],
-            },
-        ),
-    )
-    out_no_ignore = loss_no_ignore(pred, target, squash=True)
-    assert torch.isnan(out_no_ignore).any(), "Expected NaN when ignore_nans=False and target contains NaNs"
+    loss = MSELoss(ignore_nans=True)
 
-    loss_ignore = get_loss_function(
-        DictConfig(
-            {
-                "_target_": "anemoi.training.losses.spectral.SpectralCRPSLoss",
-                "transform": "octahedral_sht",
-                "nlat": nlat,
-                "ignore_nans": True,
-                "scalers": [],
-            },
-        ),
-    )
-    out = loss_ignore(pred, target, squash=False)
-    assert out.shape == (nvars,), "octahedral_sht: per-variable CRPS expected"
-    assert torch.isfinite(out).all(), "Expected finite loss when ignore_nans=True"
+    out = loss(pred, target)
+    assert torch.isfinite(out).all(), "Expected finite loss with ignore_nans=True"
 
-    out_total = loss_ignore(pred, target, squash=True)
-    assert out_total.numel() == 1, "octahedral_sht: scalar CRPS expected"
-    assert torch.isfinite(out_total).all(), "Expected finite scalar loss when ignore_nans=True"
+    (grad,) = torch.autograd.grad(out, pred, retain_graph=True)
+    assert torch.isfinite(grad).all(), "Expected finite gradients"
+
+
+def test_mse_nans() -> None:
+    """MSELoss should propagate NaNs with ignore_nans=False."""
+    pred = torch.randn(3, 4, 5, 6, 7)
+    pred.requires_grad_()
+    target = torch.randn(3, 4, 5, 6, 7)
+    target[..., 0, 0] = torch.nan
+
+    loss = MSELoss(ignore_nans=False)
+
+    out = loss(pred, target)
+    assert torch.isnan(out).any(), "Expected nan loss with ignore_nans=False"

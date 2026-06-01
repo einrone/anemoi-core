@@ -7,15 +7,18 @@
 # granted to it by virtue of its status as an intergovernmental organisation
 # nor does it submit to any jurisdiction.
 
+import datetime
 import logging
 import os
 import random
+from functools import cached_property
 
 import numpy as np
 import torch
 
 from anemoi.models.distributed.balanced_partition import get_balanced_partition_range
 from anemoi.models.distributed.balanced_partition import get_partition_range
+from anemoi.models.distributed.shapes import ShardSizes
 from anemoi.training.data.data_reader import BaseAnemoiReader
 from anemoi.training.data.dataset import AnemoiDataset
 from anemoi.training.data.usable_indices import compute_valid_data_indices
@@ -64,6 +67,173 @@ class MultiDataset(AnemoiDataset):
         }
 
         self._lazy_init_model_and_reader_group_info()
+
+    def _lazy_init_model_and_reader_group_info(self) -> None:
+        """Lazy initialize model and reader group info."""
+        # lazy init model and reader group info, will be set by the DDPGroupStrategy:
+        self.model_comm_group_rank = 0
+        self.model_comm_num_groups = 1
+        self.model_comm_group_id = 0
+        self.global_rank = 0
+
+        self.reader_group_rank = 0
+        self.reader_group_size = 1
+
+        self.sample_comm_num_groups = 1  # groups that work on the same sample / batch
+        self.sample_comm_group_id = 0
+
+        self.ens_comm_group_rank = 0
+        self.ens_comm_num_groups = 1
+        self.ens_comm_group_id = 0
+
+        self.shard_sizes = None
+
+        # additional state vars (lazy init)
+        self.n_samples_per_worker = 0
+        self.chunk_index_range: np.ndarray | None = None
+
+    def _collect(self, attr_name: str) -> dict:
+        """Helper method to collect attributes from all data readers."""
+        return {name: getattr(dataset, attr_name) for name, dataset in self.data_readers.items()}
+
+    @cached_property
+    def statistics(self) -> dict[str, dict]:
+        """Return combined statistics from all data readers."""
+        return self._collect("statistics")
+
+    @cached_property
+    def metadata(self) -> dict[str, dict]:
+        """Return combined metadata from all data readers."""
+        return self._collect("metadata")
+
+    @cached_property
+    def supporting_arrays(self) -> dict[str, dict]:
+        """Return combined supporting arrays from all data readers."""
+        return self._collect("supporting_arrays")
+
+    @cached_property
+    def variables(self) -> dict[str, list[str]]:
+        """Return combined variables from all data readers."""
+        return self._collect("variables")
+
+    @property
+    def data(self) -> dict:
+        """Return data from all data readers as dictionary."""
+        return self._collect("data")
+
+    @cached_property
+    def name_to_index(self) -> dict[str, dict]:
+        """Return combined name_to_index mapping from all data readers."""
+        return self._collect("name_to_index")
+
+    @cached_property
+    def resolution(self) -> dict[str, str]:
+        """Return combined resolution from all data readers."""
+        return self._collect("resolution")
+
+    @cached_property
+    def frequency(self) -> datetime.timedelta:
+        """Return combined frequency from all data readers."""
+        freqs = self._collect("frequency")
+        freq_ref = None
+        for name, freq in freqs.items():
+            if freq_ref is None:
+                freq_ref = freq
+            assert freq == freq_ref, f"Data reader '{name}' has different frequency than other data readers"
+        return freq_ref
+
+    def set_comm_group_info(
+        self,
+        global_rank: int,
+        model_comm_group_id: int,
+        model_comm_group_rank: int,
+        model_comm_num_groups: int,
+        reader_group_rank: int,
+        reader_group_size: int,
+        shard_sizes: dict[str, ShardSizes],
+    ) -> None:
+        """Set model and reader communication group information (called by DDPGroupStrategy).
+
+        Parameters
+        ----------
+        global_rank : int
+            Global rank
+        model_comm_group_id : int
+            Model communication group ID
+        model_comm_group_rank : int
+            Model communication group rank
+        model_comm_num_groups : int
+            Number of model communication groups
+        reader_group_rank : int
+            Reader group rank
+        reader_group_size : int
+            Reader group size
+        shard_sizes : dict[str, ShardSizes]
+            Shard sizes for all datasets
+        """
+        self.global_rank = global_rank
+        self.model_comm_group_id = model_comm_group_id
+        self.model_comm_group_rank = model_comm_group_rank
+        self.model_comm_num_groups = model_comm_num_groups
+        self.reader_group_rank = reader_group_rank
+        self.reader_group_size = reader_group_size
+
+        self.sample_comm_group_id = model_comm_group_id
+        self.sample_comm_num_groups = model_comm_num_groups
+
+        self.shard_sizes = shard_sizes
+
+        assert self.reader_group_size >= 1, f"reader_group_size(={self.reader_group_size}) must be positive"
+
+        LOGGER.info(
+            "NativeGridDataset.set_group_info(): global_rank %d, model_comm_group_id %d, "
+            "model_comm_group_rank %d, model_comm_num_groups %d, reader_group_rank %d, "
+            "sample_comm_group_id %d, sample_comm_num_groups %d",
+            global_rank,
+            model_comm_group_id,
+            model_comm_group_rank,
+            model_comm_num_groups,
+            reader_group_rank,
+            self.sample_comm_group_id,
+            self.sample_comm_num_groups,
+        )
+
+    def set_ens_comm_group_info(
+        self,
+        ens_comm_group_id: int,
+        ens_comm_group_rank: int,
+        ens_comm_num_groups: int,
+    ) -> None:
+        """Set ensemble communication group information (called by DDPGroupStrategy).
+
+        Parameters
+        ----------
+        ens_comm_group_id : int
+            Ensemble communication group ID
+        ens_comm_group_rank : int
+            Ensemble communication group rank
+        ens_comm_num_groups : int
+            Number of ensemble communication groups
+        """
+        self.ens_comm_group_id = ens_comm_group_id
+        self.ens_comm_group_rank = ens_comm_group_rank
+        self.ens_comm_num_groups = ens_comm_num_groups
+
+        self.sample_comm_group_id = ens_comm_group_id
+        self.sample_comm_num_groups = ens_comm_num_groups
+
+        LOGGER.info(
+            "NativeGridDataset.set_ens_comm_group_info(): global_rank %d, ens_comm_group_id %d, "
+            "ens_comm_group_rank %d, ens_comm_num_groups %d, reader_group_rank %d, "
+            "sample_comm_group_id %d, sample_comm_num_groups %d",
+            self.global_rank,
+            ens_comm_group_id,
+            ens_comm_group_rank,
+            ens_comm_num_groups,
+            self.reader_group_rank,
+            self.sample_comm_group_id,
+            self.sample_comm_num_groups,
+        )
 
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Initialize a specific worker.
@@ -131,11 +301,11 @@ class MultiDataset(AnemoiDataset):
         x = {}
         for name, dataset in self.data_readers.items():
             time_steps = offset_time_indices(index, self.relative_date_indices[name])
-            # self.shard_shapes is lazily initalised to None
-            # This if statement guards against the case where shard_shapes is not set
+            # self.shard_sizes is lazily initalised to None
+            # This if statement guards against the case where shard_sizes is not set
             # (e.g. if set_comm_group_info hasn't been called yet)
-            if self.shard_shapes is not None and self.shard_shapes[name] is not None:
-                start, end = get_partition_range(self.shard_shapes[name], self.reader_group_rank)
+            if self.shard_sizes is not None and self.shard_sizes[name] is not None:
+                start, end = get_partition_range(self.shard_sizes[name], self.reader_group_rank)
                 grid_indices = slice(start, end)
             else:
                 grid_indices = slice(None)
