@@ -27,13 +27,13 @@ from anemoi.models.distributed.shapes import GraphShardInfo
 from anemoi.models.distributed.shapes import ShardSizes
 from anemoi.models.distributed.shapes import get_shard_sizes
 from anemoi.models.layers.graph_provider import create_graph_provider
-from anemoi.models.models import AnemoiModelEncProcDec
+from anemoi.models.models import BaseGraphModel
 from anemoi.utils.config import DotDict
 
 LOGGER = logging.getLogger(__name__)
 
 
-class WorldJepa(AnemoiModelEncProcDec):
+class WorldJepa(BaseGraphModel):
     """Message passing graph neural network with ensemble functionality."""
 
     def __init__(
@@ -42,14 +42,15 @@ class WorldJepa(AnemoiModelEncProcDec):
         model_config: DictConfig,
         data_indices: dict,
         statistics: dict,
-        graph_data: HeteroData,
+        graph_data: dict[str,HeteroData],
         n_step_input: int,
         n_step_output: int,
     ) -> None:
         
         self.encoder_groups = DotDict(model_config).model.get("encoder_groups", {})
         self.condition_on_residual = DotDict(model_config).model.condition_on_residual
-        
+        self._graph_name_data = "data"
+
         super().__init__(
             model_config=model_config,
             data_indices=data_indices,
@@ -59,7 +60,44 @@ class WorldJepa(AnemoiModelEncProcDec):
             n_step_output=n_step_output,
         )
 
-       
+
+    def _build_named_node_attributes_graph(self) -> HeteroData:
+        assert isinstance(self._graph_data, dict), "Expected _graph_data to be a dictionary with dataset names as keys."
+
+        node_attributes_graph = HeteroData()
+        for dataset_name in self.dataset_names:
+            node_attributes_graph[dataset_name + "_data"].x = self._graph_data[dataset_name]["data"].x
+            node_attributes_graph[dataset_name + "_data"].num_nodes = self._graph_data[dataset_name]["data"].num_nodes
+
+  
+            node_attributes_graph[dataset_name + "_hidden"].x = self._graph_data[dataset_name]["hidden"].x
+            node_attributes_graph[dataset_name + "_hidden"].num_nodes = self._graph_data[dataset_name]["hidden"].num_nodes
+
+        return node_attributes_graph
+
+
+    def _calculate_input_dim_latent(self) -> dict[str, int]:
+        input_dim_latent = {}
+
+        for dataset_name in self.dataset_names:
+            encoder_name = self.encoder_groups.get(dataset_name, dataset_name)
+            hidden_node_name = f"{dataset_name}_hidden"
+
+            hidden_dim = self.node_attributes.attr_ndims[hidden_node_name]
+
+            if encoder_name in input_dim_latent:
+                assert input_dim_latent[encoder_name] == hidden_dim, (
+                    f"Encoder group '{encoder_name}' has inconsistent hidden attr dim: "
+                    f"{input_dim_latent[encoder_name]} vs {hidden_dim} "
+                    f"for dataset '{dataset_name}'."
+                )
+            else:
+                input_dim_latent[encoder_name] = hidden_dim
+
+        return input_dim_latent
+    
+    def _assert_hidden_nodes_name(self, hidden_nodes_name: str) -> None:
+        return 
 
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
         self.num_input_channels = {}
@@ -71,72 +109,139 @@ class WorldJepa(AnemoiModelEncProcDec):
 
         for dataset_name, dataset_indices in data_indices.items():
             encoder_name = self.encoder_groups.get(dataset_name, dataset_name)
-            self._internal_input_idx[encoder_name] = (
-                dataset_indices.model.input.prognostic
-            )
 
-            self.num_input_channels[encoder_name] = len(dataset_indices.model.input)
+            input_channels = len(dataset_indices.model.input)
+            prognostic_channels = len(dataset_indices.model.input.prognostic)
 
-            self.num_input_channels_prognostic[encoder_name] = len(
-                dataset_indices.model.input.prognostic
-            )
-            self.input_dim[encoder_name] = self._calculate_input_dim(encoder_name)
+            if encoder_name in self.num_input_channels:
+                assert self.num_input_channels[encoder_name] == input_channels, (
+                    f"Datasets sharing encoder '{encoder_name}' must have same input channels: "
+                    f"{self.num_input_channels[encoder_name]} vs {input_channels} "
+                    f"for dataset '{dataset_name}'."
+                )
+
+                assert self.num_input_channels_prognostic[encoder_name] == prognostic_channels, (
+                    f"Datasets sharing encoder '{encoder_name}' must have same prognostic channels: "
+                    f"{self.num_input_channels_prognostic[encoder_name]} vs {prognostic_channels} "
+                    f"for dataset '{dataset_name}'."
+                )
+            else:
+                self.num_input_channels[encoder_name] = input_channels
+                self.num_input_channels_prognostic[encoder_name] = prognostic_channels
+                self._internal_input_idx[encoder_name] = dataset_indices.model.input.prognostic
+                self.input_dim[encoder_name] = self._calculate_input_dim(dataset_name)
+
+    def _assert_encoder_edge_dims_by_group(self):
+        group_dims = {}
+
+        for dataset_name in self.dataset_names:
+            encoder_name = self.dataset_to_encoder[dataset_name]
+            edge_dim = self.encoder_graph_provider[dataset_name].edge_dim
+
+            if encoder_name in group_dims:
+                assert group_dims[encoder_name] == edge_dim, (
+                    f"Encoder group '{encoder_name}' has inconsistent edge_dim: "
+                    f"expected {group_dims[encoder_name]}, got {edge_dim} for {dataset_name}"
+                )
+            else:
+                group_dims[encoder_name] = edge_dim
+
+        return group_dims
+    
+    def _assert_edge_attributes(self):
+        # For JEPA, we require edge attributes for the encoder and processor graphs
+        first_encoder_edge_attr_dim = self.encoder_graph_provider[self.dataset_names[0]].edge_dim
+        first_processor_edge_attr_dim = self.processor_graph_provider.edge_dim
+
+        assert all(
+            self.encoder_graph_provider[dataset_name].edge_dim == first_encoder_edge_attr_dim
+            for dataset_name in self.dataset_names
+        ), "All encoder graphs must have the same edge attribute dimension."
+
+        assert all(
+            self.processor_graph_provider[dataset_name].edge_dim == first_processor_edge_attr_dim
+            for dataset_name in self.dataset_names
+        ), "All processor meshes must have the same edge attribute dimensions."
 
     def _build_networks(self, model_config: DotDict) -> None:
-        """Builds the model components."""
-        # Encoder data -> hidden
         self.encoder_graph_provider = torch.nn.ModuleDict()
+        self.processor_graph_provider = torch.nn.ModuleDict()
+
         self.encoder = torch.nn.ModuleDict()
         self.ema_encoder = torch.nn.ModuleDict()
         self.dataset_to_encoder = {}
 
+        encoder_edge_dims: dict[str, int] = {}
+        processor_edge_dims: dict[str, int] = {}
+
+        # 1. Build dataset-specific graph providers
         for dataset_name in self.dataset_names:
             encoder_name = self.encoder_groups.get(dataset_name, dataset_name)
             self.dataset_to_encoder[dataset_name] = encoder_name
 
-            # Create graph providers
+            data_node_name = f"{dataset_name}_{self._graph_name_data}"
+            hidden_node_name = f"{dataset_name}_{self._graph_name_hidden}"
+
+            graph = self._graph_data[dataset_name]
+
             self.encoder_graph_provider[dataset_name] = create_graph_provider(
-                graph=self._graph_data[(dataset_name, "to", self._graph_name_hidden)],
-                edge_attributes=model_config.model.encoder.get(
-                    "sub_graph_edge_attributes"
-                ),
-                src_size=self.node_attributes.num_nodes[dataset_name],
-                dst_size=self.node_attributes.num_nodes[self._graph_name_hidden],
+                graph=graph[(self._graph_name_data, "to", self._graph_name_hidden)],
+                edge_attributes=model_config.model.encoder.get("sub_graph_edge_attributes"),
+                src_size=self.node_attributes.num_nodes[data_node_name],
+                dst_size=self.node_attributes.num_nodes[hidden_node_name],
                 trainable_size=model_config.model.encoder.get("trainable_size", 0),
             )
-            if encoder_name not in self.encoder:
-                self.encoder[encoder_name] = instantiate(
-                    model_config.model.encoder,
-                    _recursive_=False,  # Avoids instantiation of layer_kernels here
-                    in_channels_src=self.input_dim[dataset_name],
-                    in_channels_dst=self.input_dim_latent,
-                    hidden_dim=self.num_channels,
-                    edge_dim=self.encoder_graph_provider[dataset_name].edge_dim,
-                )
-                self.ema_encoder[encoder_name] = copy.deepcopy(
-                    self.encoder[encoder_name]
-                )
-                for p in self.ema_encoder[encoder_name].parameters():
-                    p.requires_grad = False
 
-        # Processor hidden -> hidden
-        self.processor_graph_provider = create_graph_provider(
-            graph=self._graph_data[
-                (self._graph_name_hidden, "to", self._graph_name_hidden)
-            ],
-            edge_attributes=model_config.model.processor.get(
-                "sub_graph_edge_attributes"
-            ),
-            src_size=self.node_attributes.num_nodes[self._graph_name_hidden],
-            dst_size=self.node_attributes.num_nodes[self._graph_name_hidden],
-            trainable_size=model_config.model.processor.get("trainable_size", 0),
+            self.processor_graph_provider[dataset_name] = create_graph_provider(
+                graph=graph[(self._graph_name_hidden, "to", self._graph_name_hidden)],
+                edge_attributes=model_config.model.processor.get("sub_graph_edge_attributes"),
+                src_size=self.node_attributes.num_nodes[hidden_node_name],
+                dst_size=self.node_attributes.num_nodes[hidden_node_name],
+                trainable_size=model_config.model.processor.get("trainable_size", 0),
+            )
+
+            enc_edge_dim = self.encoder_graph_provider[dataset_name].edge_dim
+            proc_edge_dim = self.processor_graph_provider[dataset_name].edge_dim
+
+            if encoder_name in encoder_edge_dims:
+                assert encoder_edge_dims[encoder_name] == enc_edge_dim, (
+                    f"Encoder group '{encoder_name}' has inconsistent edge_dim: "
+                    f"{encoder_edge_dims[encoder_name]} vs {enc_edge_dim} "
+                    f"for dataset '{dataset_name}'."
+                )
+            else:
+                encoder_edge_dims[encoder_name] = enc_edge_dim
+
+            processor_edge_dims[dataset_name] = proc_edge_dim
+
+        # 2. Processor is shared, so all processor edge dims must match
+        assert len(set(processor_edge_dims.values())) == 1, (
+            f"Processor edge_dim mismatch across datasets: {processor_edge_dims}"
         )
 
+        processor_edge_dim = next(iter(processor_edge_dims.values()))
+
+        # 3. Build one encoder per encoder group
+        for encoder_name, edge_dim in encoder_edge_dims.items():
+            self.encoder[encoder_name] = instantiate(
+                model_config.model.encoder,
+                _recursive_=False,
+                in_channels_src=self.input_dim[encoder_name],
+                in_channels_dst=self.input_dim_latent[encoder_name],
+                hidden_dim=self.num_channels,
+                edge_dim=edge_dim,
+            )
+
+            self.ema_encoder[encoder_name] = copy.deepcopy(self.encoder[encoder_name])
+            for p in self.ema_encoder[encoder_name].parameters():
+                p.requires_grad = False
+
+        # 4. Shared processor
         self.processor = instantiate(
             model_config.model.processor,
-            _recursive_=False,  # Avoids instantiation of layer_kernels here
+            _recursive_=False,
             num_channels=self.num_channels,
-            edge_dim=self.processor_graph_provider.edge_dim,
+            edge_dim=processor_edge_dim,
         )
 
         self.noise_injector = instantiate(
@@ -147,12 +252,13 @@ class WorldJepa(AnemoiModelEncProcDec):
         )
 
     def _calculate_input_dim(self, dataset_name: str) -> int:
-        base_input_dim = super()._calculate_input_dim(dataset_name)
-        base_input_dim += 1  # for forecast step (fcstep)
-        if self.condition_on_residual:
-            base_input_dim += self.num_input_channels_prognostic[dataset_name]
-        return base_input_dim
+        encoder_name = self.encoder_groups.get(dataset_name, dataset_name)
 
+        return (
+            self.n_step_input * self.num_input_channels[encoder_name]
+            + self.node_attributes.attr_ndims[f"{dataset_name}_data"]
+        )
+    
     def _assemble_input(
         self,
         x: torch.Tensor,
@@ -165,8 +271,9 @@ class WorldJepa(AnemoiModelEncProcDec):
         assert (
             dataset_name is not None
         ), "dataset_name must be provided when using multiple datasets."
+        data_node_name = dataset_name + "_" + self._graph_name_data
         node_attributes_data = self.node_attributes(
-            dataset_name, batch_size=batch_ens_size
+            data_node_name, batch_size=batch_ens_size
         )
         grid_shard_sizes = (
             grid_shard_sizes[dataset_name] if grid_shard_sizes is not None else None
@@ -211,10 +318,10 @@ class WorldJepa(AnemoiModelEncProcDec):
         return x_data_latent, x_skip, grid_shard_sizes
 
     def _fetch_hidden_latent(
-        self, batch_ens_size: int, model_comm_group: ProcessGroup
+        self, dataset_name: str, batch_ens_size: int, model_comm_group: ProcessGroup
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x_hidden_latent = self.node_attributes(
-            self._graph_name_hidden, batch_size=batch_ens_size
+            dataset_name + "_" + self._graph_name_hidden, batch_size=batch_ens_size
         )
         shard_sizes_hidden = get_shard_sizes(x_hidden_latent, 0, model_comm_group)
         x_hidden_latent = shard_tensor(
@@ -232,7 +339,7 @@ class WorldJepa(AnemoiModelEncProcDec):
         model_comm_group: ProcessGroup,
     ) -> tuple[torch.Tensor, ShardSizes]:
         x_data_latent, x_skip, shard_sizes_data = self._assemble_input(
-            x[dataset_name],
+            x=x,
             fcstep=fcstep,
             batch_ens_size=batch_ens_size,
             grid_shard_sizes=grid_shard_sizes,
@@ -290,7 +397,7 @@ class WorldJepa(AnemoiModelEncProcDec):
 
     def update_ema_encoder(self, momentum: float = 0.999, inplace: bool = True) -> None:
         """Updates the EMA encoder parameters."""
-        for dataset_name in self.encoder:
+        for dataset_name in self.encoder.keys():
             for param, ema_param in zip(
                 self.encoder[dataset_name].parameters(),
                 self.ema_encoder[dataset_name].parameters(),
@@ -302,6 +409,13 @@ class WorldJepa(AnemoiModelEncProcDec):
                         momentum * ema_param.data + (1 - momentum) * param.data
                     )
 
+    def _get_consistent_dim(self, x: dict[str, Tensor], dim: int) -> int:
+        dim_sizes = [_x.shape[dim] for _x in x.values()]
+        # Assert all datasets have the same sizes
+        assert all(bs == dim_sizes[0] for bs in dim_sizes), f"Dimensions must be the same across datasets: {dim_sizes}"
+
+        return dim_sizes[0]
+    
     def inject_noise(
         self,
         x_latent: torch.Tensor,
@@ -346,7 +460,7 @@ class WorldJepa(AnemoiModelEncProcDec):
 
     def forward(
         self,
-        x: dict[str, torch.Tensor],
+        X: dict[str, torch.Tensor],
         *,
         fcstep: int,
         model_comm_group: Optional[ProcessGroup] = None,
@@ -407,14 +521,14 @@ class WorldJepa(AnemoiModelEncProcDec):
         target_latents = {}
         shard_sizes_target_data_dict = {}
 
-        x_hidden_latent, shard_sizes_hidden = self._fetch_hidden_latent(
-            batch_ens_size, model_comm_group
-        )
-        
-        y_hidden_latent = x_hidden_latent  # For JEPA, the target encoder uses the same hidden latent as the context encoder
-
         for dataset_name in dataset_names:
-            data = x[dataset_name]
+            x_hidden_latent, shard_sizes_hidden = self._fetch_hidden_latent(
+                dataset_name, batch_ens_size, model_comm_group
+            )
+        
+            y_hidden_latent = x_hidden_latent  # For JEPA, the target encoder uses the same hidden latent as the context encoder
+
+            data = X[dataset_name]
             x = data["input"]
             y = data["target"]
 
@@ -489,8 +603,8 @@ class WorldJepa(AnemoiModelEncProcDec):
 
             y_data_latent, y_latent_target = self.ema_target_encoder(
                 encoder_name=encoder_name,
-                x_data_latent=x_data_latent,
-                x_hidden_latent=x_hidden_latent,
+                y_data_latent=y_data_latent,
+                y_hidden_latent=y_hidden_latent,
                 batch_ens_size=batch_ens_size,
                 enc_shard_info=enc_shard_info,
                 encoder_edge_attr=encoder_edge_attr,
@@ -501,7 +615,7 @@ class WorldJepa(AnemoiModelEncProcDec):
             y_data_latent_dict[dataset_name] = y_data_latent
             target_latents[dataset_name] = y_latent_target
 
-        x_latent = sum(dataset_latents.values())
+        #x_latent = sum(dataset_latents.values())
         
         if self.noise_injector is not None:
             x_latent_proc, latent_noise = self.inject_noise(
@@ -518,7 +632,7 @@ class WorldJepa(AnemoiModelEncProcDec):
             processor_edge_attr,
             processor_edge_index,
             proc_edge_shard_sizes,
-        ) = self.processor_graph_provider.get_edges(
+        ) = self.processor_graph_provider[dataset_name].get_edges(
             batch_size=batch_ens_size,
             model_comm_group=model_comm_group,
         )
@@ -540,4 +654,4 @@ class WorldJepa(AnemoiModelEncProcDec):
 
 
 
-        y_latent_target = sum(target_latents.values())
+        #y_latent_target = sum(target_latents.values())
