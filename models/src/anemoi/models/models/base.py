@@ -13,6 +13,7 @@ from abc import abstractmethod
 from typing import Optional
 
 import torch
+from pathlib import PosixPath
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from omegaconf import ListConfig
@@ -29,6 +30,7 @@ from anemoi.models.distributed.shapes import DatasetShardSizes
 from anemoi.models.distributed.shapes import get_shard_sizes
 from anemoi.models.layers.bounding import build_boundings
 from anemoi.models.layers.graph import NamedNodesAttributes
+from anemoi.models.layers.graph_provider import _GraphFileDataset
 from anemoi.models.utils.config import broadcast_config_keys
 from anemoi.utils.config import DotDict
 
@@ -63,6 +65,10 @@ class BaseGraphModel(nn.Module):
         """
         super().__init__()
         self._graph_data = graph_data
+        print("Graph data type:", type(self._graph_data))
+        if isinstance(self._graph_data, PosixPath): 
+            self._graph_data_dict = _GraphFileDataset(self._graph_data)
+        print("Graph data dict type:", type(self._graph_data_dict))
         self.data_indices = data_indices
         self.statistics = statistics
         self.n_step_input = n_step_input
@@ -79,11 +85,18 @@ class BaseGraphModel(nn.Module):
             data=self.dataset_names,
             hidden=self._graph_name_hidden,
         )
-        self.node_attributes = NamedNodesAttributes(trainable_parameters, self._build_named_node_attributes_graph())
+        if isinstance(self._graph_data, PosixPath): 
+            self._graph_data_dict = _GraphFileDataset(self._graph_data)
+            self.node_attributes = NamedNodesAttributes(trainable_parameters, self._build_named_node_attributes_graph())
+        else: 
+            self.node_attributes = NamedNodesAttributes(trainable_parameters, self._build_named_node_attributes_graph())
 
         self._calculate_shapes_and_indices(data_indices)
         self._assert_matching_indices(data_indices)
         self._assert_hidden_nodes_name(self._graph_name_hidden)
+
+        # build dataset to encoder and the other way around
+        self._build_dataset_routing(model_config)
 
         # build networks
         self._build_networks(model_config)
@@ -95,6 +108,28 @@ class BaseGraphModel(nn.Module):
         # Instantiation of model output bounding functions (e.g., to ensure outputs like TP are positive definite)
         # Multi-dataset: create ModuleDict with ModuleList per dataset
         self.boundings = build_boundings(model_config, self.data_indices, self.statistics)
+    
+    def _build_dataset_routing(self, model_config: DotDict) -> None:
+        """Builds the dataset routing for encoders and decoders."""
+        self.dataset2encoder: dict[str, str] = {}
+        self.encoder2datasets: dict[str, list[str]] = {}
+        for encoder_name, encoder_config in model_config.model.encoders.items():
+            datasets_to_encode = encoder_config["datasets"]
+            self.encoder2datasets[encoder_name] = datasets_to_encode
+            assert len(datasets_to_encode) == 1, "Each encoder must be associated with exactly one dataset for now."
+            for d in datasets_to_encode:
+                self.dataset2encoder[d] = str(encoder_name)
+
+        self.dataset2decoder: dict[str, str] = {}
+        self.decoder2datasets: dict[str, list[str]] = {}
+        for decoder_name, decoder_config in model_config.model.decoders.items():
+            datasets_to_decode = decoder_config["datasets"]
+            self.decoder2datasets[decoder_name] = datasets_to_decode
+            assert len(datasets_to_decode) == 1, "Each decoder must be associated with exactly one dataset for now."
+            for d in datasets_to_decode:
+                self.dataset2decoder[d] = str(decoder_name)
+
+        self.target_datasets = list(self.dataset2decoder.keys())
 
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
         # Multi-dataset: create dictionaries for each property
@@ -151,10 +186,11 @@ class BaseGraphModel(nn.Module):
         )
 
     def _assert_hidden_nodes_name(self, hidden_nodes_name: str) -> None:
-        for hidden_name in self._as_hidden_node_names(hidden_nodes_name):
-            assert (
-                hidden_name in self._graph_data.node_types
-            ), f"Hidden nodes name '{hidden_name}' not found in graph data node types {self._graph_data.node_types}"
+        pass
+        # for hidden_name in self._as_hidden_node_names(hidden_nodes_name):
+        #     assert (
+        #         hidden_name in self._graph_data.node_types
+        #     ), f"Hidden nodes name '{hidden_name}' not found in graph data node types {self._graph_data.node_types}"
 
     def _calculate_target_dim(self, dataset_name: str) -> int:
         # Default behaviour is to pass the same input as to the encoder.
@@ -243,12 +279,17 @@ class BaseGraphModel(nn.Module):
 
     def _build_residual(self, residual_config: DotDict) -> None:
         self.residual = torch.nn.ModuleDict()
-        fused = uses_fused_dataset_graph(self._graph_data, self.dataset_names)
+        if isinstance(self._graph_data, PosixPath): 
+            self._graph_data_dict = _GraphFileDataset(self._graph_data)
+        else:
+            self._graph_data_dict = self._graph_data
+        fused = uses_fused_dataset_graph(self._graph_data_dict[self.dataset_names[0]], self.dataset_names)
+        print("fused", fused)
         for dataset_name in self.dataset_names:
             data_node_name = dataset_name if fused else DEFAULT_DATASET_NAME
             self.residual[dataset_name] = instantiate(
                 residual_config,
-                graph=self._graph_data,
+                graph=self._graph_data_dict,
                 data_node_name=data_node_name,
                 statistics=self.statistics[dataset_name],
                 data_indices=self.data_indices[dataset_name],
@@ -258,12 +299,20 @@ class BaseGraphModel(nn.Module):
     def _build_named_node_attributes_graph(self) -> HeteroData:
         node_attributes_graph = HeteroData()
         for dataset_name in self.dataset_names:
-            node_attributes_graph[dataset_name].x = self._graph_data[dataset_name].x
-            node_attributes_graph[dataset_name].num_nodes = self._graph_data[dataset_name].num_nodes
+            # I think my graphs have an old definition where the dataset name is not the same 
+            node_attributes_graph[dataset_name].x = self._graph_data_dict[dataset_name]["data"].x
+            node_attributes_graph[dataset_name].num_nodes = len(self._graph_data_dict[dataset_name]["data"].x)
+            node_attributes_graph[self._graph_name_hidden].x = self._graph_data_dict[dataset_name][self._graph_name_hidden].x
+            node_attributes_graph[self._graph_name_hidden].num_nodes = len(self._graph_data_dict[dataset_name][self._graph_name_hidden].x)
 
-        for hidden_name in self._as_hidden_node_names(self._graph_name_hidden):
-            node_attributes_graph[hidden_name].x = self._graph_data[hidden_name].x
-            node_attributes_graph[hidden_name].num_nodes = self._graph_data[hidden_name].num_nodes
+        # It seems that the processor is assumed to be common for multi-dataset graphs
+        # Is the encoder/decoder only provided in the .pt files usually? 
+        # YES: subgraphs per dataset are provided in the .pt files
+        # Is multi-dataset assuming one graph for all datasets? 
+        # Revisit aurtomatic graph generation and check 
+        # for hidden_name in self._as_hidden_node_names(self._graph_name_hidden):
+        #     node_attributes_graph[hidden_name]["data"].x = self._graph_data_dict[hidden_name].x
+        #     node_attributes_graph[hidden_name]["data"].num_nodes = self._graph_data_dict[hidden_name].num_nodes
 
         return node_attributes_graph
 

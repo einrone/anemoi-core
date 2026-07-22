@@ -97,7 +97,34 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
 
     model_state_dict = model.state_dict()
 
+    for key in model_state_dict:
+        if "multi-domain" in key:
+            if "mlp." in key:
+                key = key.replace(".mlp", "")
+                if "_0" in key:
+                    key = key.replace("_0", ".0")
+            key_ckpt = key.replace("multi-domain.", "")
+            state_dict[key] = state_dict.pop(key_ckpt)
+            print(f"replacing {key_ckpt} with {key}" )
+        if "multi-domain.mlp" in key:
+            key_ckpt = key.replace("multi-domain.", "")
+            state_dict[key] = state_dict.pop(key_ckpt)
+            print(f"replacing {key_ckpt} with {key}" )
+
+
     for key in state_dict.copy():
+        if "blocks.0" in key:
+            key_ckpt = key.replace("blocks.0.", "")
+            state_dict[key_ckpt] = state_dict.pop(key)
+            print(f"replacing {key} with {key_ckpt}" )
+        if "blocks.1" in key:
+            number = int(key[27])
+            print(number)
+            new_number = str(8+number)
+            print(new_number)
+            key_ckpt = key.replace(key[27] + ".blocks.1", new_number)
+            print(f"replacing {key} with {key_ckpt}" )
+            state_dict[key_ckpt] = state_dict.pop(key)
         if key in model_state_dict and state_dict[key].shape != model_state_dict[key].shape:
             LOGGER.info("Skipping loading parameter: %s", key)
             LOGGER.info("Checkpoint shape: %s", str(state_dict[key].shape))
@@ -105,11 +132,12 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
 
             del state_dict[key]  # Remove the mismatched key
 
-    # Load the filtered st-ate_dict into the model
+    # Load the filtered state_dict into the model
     model.load_state_dict(state_dict, strict=False)
 
     ## Needed for data indices check
     data_indices = checkpoint["hyper_parameters"]["data_indices"]
+    data_indices = {"data": data_indices}
 
     if isinstance(data_indices, dict):
         # New format: data_indices is always a dict in new code (even for single-dataset)

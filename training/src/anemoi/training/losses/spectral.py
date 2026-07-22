@@ -65,6 +65,7 @@ class SpectralLoss(BaseLoss):
     """Base class for spectral losses."""
 
     transform: SpectralTransform
+    needs_graph_data: bool = True
 
     def __init__(
         self,
@@ -308,6 +309,11 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
         self.alpha = alpha
         self.backend = backend
         self.no_autocast = no_autocast
+        print(kwargs)
+        if kwargs.get("subgrid"): 
+            assert kwargs.get("graph_data") is not None, "graph data must be provided to cut out the subgrid"
+            self.cutout_mask = kwargs.get("graph_data")["data"].cutout_mask
+            self.subgrid = kwargs.get("subgrid")
 
     def forward(
         self,
@@ -324,9 +330,15 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
         is_sharded = grid_shard_slice is not None
         group = group if is_sharded else None
 
+        if self.subgrid:
+            pred = pred[:,:,:,self.cutout_mask.flatten(),:]
+            target = target[:,:,self.cutout_mask.flatten(),:]
+
         # → [..., modes, vars]
         pred_spec = self._to_spectral_flat(pred)
+        print("Spectral prediction", pred_spec)
         tgt_spec = self._to_spectral_flat(target)
+        print("Spectral target", tgt_spec)
 
         pred_spec = einops.rearrange(pred_spec, "b t e m v -> b t v m e")  # ensemble dim last for preds
         tgt_spec = einops.rearrange(tgt_spec, "... m v -> (...) v m")  # remove ensemble dim for targets
@@ -336,13 +348,14 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
         else:
             crps = self._kernel_crps(pred_spec, tgt_spec)
         crps = einops.rearrange(crps, "b t v m -> b t 1 m v")  # consistent with tensordim
-
+        print("UNSCALED SPECTRAL LOSS", crps)
         scaled = self.scale(
             crps,
             scaler_indices,
             without_scalers=_ensure_without_scalers_has_grid_dimension(without_scalers),
             grid_shard_slice=grid_shard_slice,
         )
+        print("Spectral CRPS total loss", self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode))
         return self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode)
 
     @property

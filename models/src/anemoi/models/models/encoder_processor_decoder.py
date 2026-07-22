@@ -13,6 +13,7 @@ from typing import Optional
 
 import einops
 import torch
+from pathlib import PosixPath
 from hydra.utils import instantiate
 from torch import Tensor
 from torch.distributed.distributed_c10d import ProcessGroup
@@ -37,32 +38,42 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         """Builds the model components."""
         # Encoder data -> hidden
         self.encoder_graph_provider = torch.nn.ModuleDict()
-        self.encoder = torch.nn.ModuleDict()
+        # idea: _graph_data can be a dictionary of dataset names with data paths, so that the correct dataset can be loaded 
         for dataset_name in self.dataset_names:
+            encoder_config = model_config.model.encoders[self.dataset2encoder[dataset_name]]
             # Create graph providers
             self.encoder_graph_provider[dataset_name] = create_graph_provider(
-                graph=self._graph_data[(dataset_name, "to", self._graph_name_hidden)],
-                edge_attributes=model_config.model.encoder.get("sub_graph_edge_attributes"),
-                src_size=self.node_attributes.num_nodes[dataset_name],
-                dst_size=self.node_attributes.num_nodes[self._graph_name_hidden],
-                trainable_size=model_config.model.encoder.get("trainable_size", 0),
+                graph=self._graph_data[(dataset_name, "to", self._graph_name_hidden)] if not type(self._graph_data) is PosixPath else self._graph_data,
+                edge_attributes=encoder_config.get("sub_graph_edge_attributes"),
+                src_size=self.node_attributes.num_nodes[dataset_name] if not type(self._graph_data) is PosixPath else "data",
+                dst_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
+                trainable_size=encoder_config.get("trainable_size", 0),
             )
 
-            self.encoder[dataset_name] = instantiate(
-                model_config.model.encoder,
+        self.encoder = torch.nn.ModuleDict()
+        for encoder_name, encoder_config in model_config.model.encoders.items():
+            encoder_in_channels_src = [self.input_dim[d] for d in self.encoder2datasets[encoder_name]]
+            assert all(ch == encoder_in_channels_src[0] for ch in encoder_in_channels_src), (
+                f"All datasets for encoder {encoder_name} must have the same input dimension"
+                f"but got {encoder_in_channels_src}"
+            )
+            # TODO: allow different input dimensions? What happens with multi-domain? 
+
+            self.encoder[str(encoder_name)] = instantiate(
+                encoder_config.mapper,
                 _recursive_=False,  # Avoids instantiation of layer_kernels here
-                in_channels_src=self.input_dim[dataset_name],
+                in_channels_src=encoder_in_channels_src[0],
                 in_channels_dst=self.input_dim_latent,
                 hidden_dim=self.num_channels,
-                edge_dim=self.encoder_graph_provider[dataset_name].edge_dim,
+                edge_dim=self.encoder_graph_provider[self.encoder2datasets[encoder_name][0]].edge_dim,
             )
 
         # Processor hidden -> hidden
         self.processor_graph_provider = create_graph_provider(
-            graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)],
+            graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)]if not type(self._graph_data) is PosixPath else self._graph_data,
             edge_attributes=model_config.model.processor.get("sub_graph_edge_attributes"),
-            src_size=self.node_attributes.num_nodes[self._graph_name_hidden],
-            dst_size=self.node_attributes.num_nodes[self._graph_name_hidden],
+            src_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
+            dst_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
             trainable_size=model_config.model.processor.get("trainable_size", 0),
         )
 
@@ -75,24 +86,42 @@ class AnemoiModelEncProcDec(BaseGraphModel):
 
         # Decoder hidden -> data
         self.decoder_graph_provider = torch.nn.ModuleDict()
-        self.decoder = torch.nn.ModuleDict()
         for dataset_name in self.dataset_names:
+            if dataset_name not in self.target_datasets:
+                LOGGER.info(
+                    f"Dataset {dataset_name} is not part of the output as it doesn't have a corresponding decoder."
+                )
+                continue
+
+            decoder_config = model_config.model.decoders[self.dataset2decoder[dataset_name]]
             self.decoder_graph_provider[dataset_name] = create_graph_provider(
-                graph=self._graph_data[(self._graph_name_hidden, "to", dataset_name)],
-                edge_attributes=model_config.model.decoder.get("sub_graph_edge_attributes"),
-                src_size=self.node_attributes.num_nodes[self._graph_name_hidden],
-                dst_size=self.node_attributes.num_nodes[dataset_name],
-                trainable_size=model_config.model.decoder.get("trainable_size", 0),
+                graph=self._graph_data[(self._graph_name_hidden, "to", dataset_name)]if not type(self._graph_data) is PosixPath else self._graph_data,
+                edge_attributes=decoder_config.get("sub_graph_edge_attributes"),
+                src_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
+                dst_size=self.node_attributes.num_nodes[dataset_name] if not type(self._graph_data) is PosixPath else "data",
+                trainable_size=decoder_config.get("trainable_size", 0),
+            )
+        self.decoder = torch.nn.ModuleDict()
+        for decoder_name, decoder_config in model_config.model.decoders.items():
+            decoder_in_channels_dst = [self.target_dim[d] for d in self.decoder2datasets[decoder_name]]
+            assert all(ch == decoder_in_channels_dst[0] for ch in decoder_in_channels_dst), (
+                f"All datasets for decoder {decoder_name} must have the same target dimension, "
+                f"but got {decoder_in_channels_dst}."
+            )
+            decoder_output_channels_dst = [self.output_dim[d] for d in self.decoder2datasets[decoder_name]]
+            assert all(ch == decoder_output_channels_dst[0] for ch in decoder_output_channels_dst), (
+                f"All datasets for decoder {decoder_name} must have the same output dimension, "
+                f"but got {decoder_output_channels_dst}."
             )
 
-            self.decoder[dataset_name] = instantiate(
-                model_config.model.decoder,
+            self.decoder[str(decoder_name)] = instantiate(
+                decoder_config.mapper,
                 _recursive_=False,  # Avoids instantiation of layer_kernels here
-                in_channels_src=self.num_channels,
-                in_channels_dst=self.target_dim[dataset_name],
+                in_channels_src=self.processor.num_channels,
+                in_channels_dst=decoder_in_channels_dst[0],
                 hidden_dim=self.num_channels,
-                out_channels_dst=self.output_dim[dataset_name],
-                edge_dim=self.decoder_graph_provider[dataset_name].edge_dim,
+                out_channels_dst=decoder_output_channels_dst[0],
+                edge_dim=self.decoder_graph_provider[self.decoder2datasets[encoder_name][0]].edge_dim,
             )
 
     def _assemble_input(
@@ -208,6 +237,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
             Output of the model, with the same shape as the input (sharded if input is sharded)
         """
         dataset_names = list(x.keys())
+        print("dataset names", dataset_names)
 
         # Extract and validate batch & ensemble sizes across datasets
         batch_size = self._get_consistent_dim(x, 0)
@@ -246,8 +276,8 @@ class AnemoiModelEncProcDec(BaseGraphModel):
             ].get_edges(
                 batch_size=batch_size,
                 model_comm_group=model_comm_group,
+                device=x.device,
             )
-
             enc_shard_info = BipartiteGraphShardInfo(
                 src_nodes=shard_sizes_data,  # None if not sharded (in_out_sharded=False)
                 dst_nodes=shard_sizes_hidden,
@@ -293,9 +323,10 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         x_out_dict = {}
         for dataset_name in dataset_names:
             # Compute decoder edges using updated latent representation
+            
             decoder_edge_attr, decoder_edge_index, dec_edge_shard_sizes = self.decoder_graph_provider[
                 dataset_name
-            ].get_edges(batch_size=batch_size, model_comm_group=model_comm_group)
+            ].get_edges(batch_size=batch_size, model_comm_group=model_comm_group, device=x.device)
 
             dec_shard_info = BipartiteGraphShardInfo(
                 src_nodes=shard_sizes_hidden,

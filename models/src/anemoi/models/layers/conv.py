@@ -112,6 +112,9 @@ class GraphTransformerConv(MessagePassing):
         dim_size = query.shape[0]
         heads = query.shape[1]
 
+        if isinstance(size, int):
+            size = (size, size)
+
         out = self.propagate(
             edge_index=edge_index,
             size=size,
@@ -125,6 +128,19 @@ class GraphTransformerConv(MessagePassing):
 
         return out
 
+    @staticmethod
+    def _expand_edge_attr(edge_attr: OptTensor, reference: Tensor) -> OptTensor:
+        if edge_attr is None:
+            return None
+
+        if edge_attr.dim() == 2:
+            edge_attr = edge_attr.unsqueeze(1)
+
+        if edge_attr.dim() == 3 and edge_attr.size(1) == 1 and reference.size(1) > 1:
+            edge_attr = edge_attr.expand(-1, reference.size(1), -1)
+
+        return edge_attr
+
     def message(
         self,
         heads: int,
@@ -136,6 +152,8 @@ class GraphTransformerConv(MessagePassing):
         ptr: OptTensor,
         size_i: Optional[int],
     ) -> Tensor:
+        edge_attr = self._expand_edge_attr(edge_attr, key_j)
+
         if edge_attr is not None:
             key_j = key_j + edge_attr
 
@@ -144,4 +162,7 @@ class GraphTransformerConv(MessagePassing):
         alpha = softmax(alpha, index, ptr, size_i)
         alpha = dropout(alpha, p=self.dropout, training=self.training)
 
-        return (value_j + edge_attr) * alpha.view(-1, heads, 1)
+        if edge_attr is not None:
+            value_j = value_j + edge_attr
+
+        return value_j * alpha.view(-1, heads, 1)

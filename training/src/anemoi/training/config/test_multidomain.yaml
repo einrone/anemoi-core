@@ -1,0 +1,113 @@
+defaults:
+- data: multi
+- dataloader: multi
+- diagnostics: evaluation_multi
+- system: example
+- graph: multi
+- model: graphtransformer
+- task: forecaster
+- training: multi
+- _self_
+
+config_validation: True
+
+data:
+  resolution: o96
+
+model:
+  encoders:
+    0: ${model.encoder}
+    1: ${model.encoder}
+  decoders:
+    0: ${model.decoder}
+    1: ${model.decoder}
+
+
+system:
+  datasets:
+    MEPS: 
+      encoder: 0
+      decoder: 0
+      dataset: 
+        cutout:
+          - dataset: ${hardware.paths.data}/MEPS/aifs-meps-2.5km-2020-2025-6h-v7.zarr
+            trim_edge: 50
+          - dataset: ${global}
+        min_distance_km: 0
+        adjust: all
+        reorder: sort
+        statistics: ${statistics}
+    AA:
+      encoder: 0 # 0 for multi-domain, null to not encode this dataset
+      decoder: 0 # 0 for multi-domain, null to not decode this dataset
+      dataset: 
+        cutout:
+          - dataset: ${hardware.paths.data}/AROME-ARCTIC/arome_arctic-2.5km-2022-2025-6h-v4.zarr
+            trim_edge: 50
+          - dataset: ${global}
+        min_distance_km: 0
+        adjust: all
+        reorder: sort
+        statistics: ${statistics}
+
+global: 
+  concat:
+    - join:
+        - concat:
+            - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2022-6h-v6.zarr
+              drop: [cp, slor, sdor, tcw, q_50, q_250, q_600, t_50, t_250, t_600, u_50, u_250, u_600, v_50, v_250, v_600, w_50, w_250, w_600, z_50, z_250, z_600]
+              start: null
+              end: 2022-12-31
+              reorder: sort
+            - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-od-an-oper-0001-mars-n320-2019-2023-6h-v6.zarr
+              start: 2023-01-01
+              end: null
+              drop: [cp, slor, sdor, tcw, q_50, q_250, q_600, t_50, t_250, t_600, u_50, u_250, u_600, v_50, v_250, v_600, w_50, w_250, w_600, z_50, z_250, z_600]
+              reorder: sort
+        - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2023-6h-v1-land.zarr
+          select: [lcc, mcc, hcc, tcc, strd, ssrd]
+      reorder: sort
+    - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/IFS/aifs-od-an-oper-0001-mars-n320-2024-2025-6h-v1.zarr
+      drop: [al, cp, latitude, longitude, q_250, q_50, q_600, sdor, slor, sr, stl1, swvl1, t_250, t_50, t_600, tcw, u_250, u_50, u_600, v_250, v_50, v_600, w_250, w_50, w_600, z_250, z_50, z_600]
+      reorder: sort
+
+statistics: 
+  join:
+    - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2022-6h-v6.zarr
+      drop: [cp, slor, sdor, tcw, q_50, q_250, q_600, t_50, t_250, t_600, u_50, u_250, u_600, v_50, v_250, v_600, w_50, w_250, w_600, z_50, z_250, z_600]
+      reorder: sort
+    - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2023-6h-v1-land.zarr
+      select: [lcc, mcc, hcc, tcc, strd, ssrd]
+  adjust: ["start", "end"]
+  reorder: sort
+
+dataloader: 
+  training:
+    MEPS:
+      dataset_config: ${system.datasets.MEPS.dataset}
+      start: 2020-02-05
+      end: 2024-09-20 
+    AA:
+      dataset_config: ${system.datasets.AA.dataset}
+      start: 2022-02-01 
+      end: 2024-03-07
+
+  validation:
+    MEPS:
+      dataset_config: ${system.datasets.MEPS.dataset}
+      start: 2024-09-21
+      end: 2025-09-21
+    AA:
+      dataset_config: ${system.datasets.AA.dataset}
+      start: 2024-03-08 
+      end: 2025-03-08
+  
+  test:
+    MEPS:
+      dataset_config: ${system.datasets.MEPS.dataset}
+      start: 2025-09-22
+      end: null
+    AA:
+      dataset_config: ${system.datasets.AA.dataset}
+      start: 2025-03-09
+      end: null

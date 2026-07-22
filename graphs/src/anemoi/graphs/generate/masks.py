@@ -47,7 +47,8 @@ class _TorchClusterAreaMaskBackend:
         self._ref_vectors = latlon_rad_to_cartesian(coords_rad.to(self.device))
 
     def get_mask(self, coords_rad: torch.Tensor | np.ndarray, chord_threshold: float) -> torch.Tensor:
-        from torch_geometric.nn import radius
+        # from torch_geometric.nn import radius
+        from torch_cluster import radius
 
         assert self._ref_vectors is not None, "The model must be fitted before calling get_mask."
 

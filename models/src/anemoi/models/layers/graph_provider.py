@@ -67,8 +67,9 @@ def create_graph_provider(
         Appropriate graph provider instance
     """
     if graph:
-        if type(graph) is Path or (isinstance(graph, str) and Path(graph).is_dir()):
-            return FileGraphProvider(graph_dir=graph)
+        print("graph type:", type(graph))
+        if isinstance(graph, Path) and graph.is_dir():
+            return FileGraphProvider(graph_dir=graph, src_size=src_size, dst_size=dst_size, edge_attributes=edge_attributes, trainable_size=trainable_size)
         else:
             return StaticGraphProvider(
                 graph=graph,
@@ -96,7 +97,7 @@ class BaseGraphProvider(nn.Module, ABC):
         dst_coords: Optional[Tensor] = None,
         model_comm_group: Optional[ProcessGroup] = None,
         shard_edges: bool = True,
-    ) -> Union[tuple[Tensor, Adj, Optional[ShardSizes]], Tensor]:
+    ) -> Union[tuple[Tensor, Adj, Optional[tuple[list, list]]], Tensor]:
         """Get edge information.
 
         Parameters
@@ -114,8 +115,8 @@ class BaseGraphProvider(nn.Module, ABC):
 
         Returns
         -------
-        Union[tuple[Tensor, Adj, Optional[ShardSizes]], Tensor]
-            For standard providers: (edge_attr, edge_index, edge_shard_sizes) tuple
+        Union[tuple[Tensor, Adj, Optional[tuple[list, list]]], Tensor]
+            For standard providers: (edge_attr, edge_index, edge_shard_shapes) tuple
             For sparse providers: sparse projection matrix
         """
         pass
@@ -212,7 +213,7 @@ class StaticGraphProvider(BaseGraphProvider):
         batch_size: int,
         shard_edges: bool,
         model_comm_group: Optional[ProcessGroup],
-    ) -> tuple[Tensor, Adj, Optional[ShardSizes]]:
+    ) -> tuple[Tensor, Adj, Optional[tuple[list, list]]]:
         """Implementation of get_edges."""
         edge_attr = self.trainable(self.edge_attr, batch_size)
         edge_index = self._expand_edges(self.edge_index_base, self.edge_inc, batch_size)
@@ -233,7 +234,7 @@ class StaticGraphProvider(BaseGraphProvider):
         model_comm_group: Optional[ProcessGroup] = None,
         shard_edges: bool = True,
         act_checkpoint: bool = True,
-    ) -> tuple[Tensor, Adj, Optional[ShardSizes]]:
+    ) -> tuple[Tensor, Adj, Optional[tuple[list, list]]]:
         """Get edge attributes and expanded edge index for static graph.
 
         Parameters
@@ -253,9 +254,9 @@ class StaticGraphProvider(BaseGraphProvider):
 
         Returns
         -------
-        tuple[Tensor, Adj, Optional[ShardSizes]]
-            Edge attributes, expanded edge index, and optional edge_shard_sizes.
-            edge_shard_sizes is a list of per-rank partition sizes when shard_edges=True,
+        tuple[Tensor, Adj, Optional[tuple[list, list]]]
+            Edge attributes, expanded edge index, and optional edge_shard_shapes.
+            edge_shard_shapes is (shapes_edge_attr, shapes_edge_idx) when shard_edges=True,
             otherwise None.
         """
         if act_checkpoint:
@@ -287,7 +288,7 @@ class NoOpGraphProvider(BaseGraphProvider):
         model_comm_group: Optional[ProcessGroup] = None,
         shard_edges: bool = True,
     ) -> tuple[None, None, None]:
-        """Return None for edge attributes, edge index, and edge_shard_sizes.
+        """Return None for edge attributes, edge index, and edge_shard_shapes.
 
         Parameters
         ----------
@@ -368,7 +369,7 @@ class DynamicGraphProvider(BaseGraphProvider):
         dst_coords: Tensor,
         shard_edges: bool,
         model_comm_group: Optional[ProcessGroup],
-    ) -> tuple[Tensor, Adj, Optional[ShardSizes]]:
+    ) -> tuple[Tensor, Adj, Optional[tuple[list, list]]]:
         """Implementation of get_edges, separated for checkpointing."""
         # Build graph from coordinates
         edge_attr, edge_index = self.build_graph(src_coords, dst_coords)
@@ -386,7 +387,7 @@ class DynamicGraphProvider(BaseGraphProvider):
         model_comm_group: Optional[ProcessGroup] = None,
         shard_edges: bool = True,
         act_checkpoint: bool = True,
-    ) -> tuple[Tensor, Adj, Optional[ShardSizes]]:
+    ) -> tuple[Tensor, Adj, Optional[tuple[list, list]]]:
         """Get dynamic edges constructed from node coordinates.
 
         Calls build_graph() to construct edges on-the-fly using k-NN, radius graphs, etc.
@@ -408,8 +409,8 @@ class DynamicGraphProvider(BaseGraphProvider):
 
         Returns
         -------
-        tuple[Tensor, Adj, Optional[ShardSizes]]
-            Edge attributes, edge index, and optional edge_shard_sizes
+        tuple[Tensor, Adj, Optional[tuple[list, list]]]
+            Edge attributes, edge index, and optional edge_shard_shapes
 
         Raises
         ------
@@ -531,8 +532,6 @@ class ProjectionGraphProvider(BaseGraphProvider):
         row_normalize: bool,
     ) -> None:
         """Create sparse projection matrix."""
-        row_index = edge_index[0].long()
-        edge_index = torch.stack([row_index, edge_index[1].long()])
 
         if row_normalize:
             weights = self._row_normalize_weights(edge_index, weights, src_size)
@@ -546,11 +545,10 @@ class ProjectionGraphProvider(BaseGraphProvider):
 
         self._edge_dim = self.projection_matrix.shape[1]
 
-        row_sums = torch.zeros(src_size, device=weights.device).scatter_add_(0, row_index, weights)
+        row_sums = torch.zeros(src_size, device=weights.device).scatter_add_(0, edge_index[0], weights)
         if not torch.allclose(row_sums, torch.ones_like(row_sums), atol=1e-5):
             LOGGER.warning(
                 "Projection matrix rows do not sum to 1 (min=%.4f, max=%.4f, mean=%.4f). "
-                "This is unexpected; please check your matrix. "
                 "Consider using row_normalize=True or pre-normalized weights.",
                 row_sums.min().item(),
                 row_sums.max().item(),
@@ -561,10 +559,9 @@ class ProjectionGraphProvider(BaseGraphProvider):
     def _row_normalize_weights(edge_index: Tensor, weights: Tensor, num_rows: int) -> Tensor:
         """Normalize weights per row (target node) so each row sums to 1."""
         total = torch.zeros(num_rows, device=weights.device)
-        row_index = edge_index[0].long()
         # edge_index[0] contains row indices (targets) for COO tensor format
-        norm = total.scatter_add_(0, row_index, weights)
-        norm = norm[row_index]
+        norm = total.scatter_add_(0, edge_index[0].long(), weights)
+        norm = norm[edge_index[0]]
         return weights / (norm + 1e-8)
 
     @property
@@ -635,6 +632,8 @@ class _GraphFileDataset(Dataset):
 
         self.paths: list[Path] = sorted(self.graph_dir.glob(f"*{extension}"))
         self.paths = {path.parts[-1].split(".")[0]: path for path in self.paths}
+        self.names = list(self.paths.keys())
+        print("available graph names", self.names)
         if not self.paths:
             raise RuntimeError(f"No {extension} files found in {self.graph_dir}")
 
@@ -646,6 +645,7 @@ class _GraphFileDataset(Dataset):
     def __getitem__(self, name: int) -> HeteroData:
         """Load and return the graph object at *name*."""
         path = self.paths[name]
+        LOGGER.info("loading graph from path: %s", path)
         return torch.load(path, weights_only=False, map_location="cpu")
 
     def __repr__(self) -> str:
@@ -693,7 +693,11 @@ class FileGraphProvider(BaseGraphProvider):
 
     def __init__(
         self,
+        src_size: str,
+        dst_size: str,
         graph_dir: Union[str, Path],
+        edge_attributes: Optional[list[str]] = None,
+        trainable_size: int = 0,
         extension: str = ".pt",
         batch_size: int = 1,
         num_workers: int = 1,
@@ -702,11 +706,15 @@ class FileGraphProvider(BaseGraphProvider):
         pin_memory: bool = True,
     ) -> None:
         super().__init__()
-
+        self.src_name = src_size
+        self.dst_name = dst_size
+        self.edge_attributes = edge_attributes
+        self.trainable_size = trainable_size
         self.graph_dir = Path(graph_dir)
 
         # Build dataset and dataloader
         self._dataset = _GraphFileDataset(self.graph_dir, extension=extension)
+        self.names = self._dataset.names
 
         collate_fn = PyGCollater(dataset=None, follow_batch=[], exclude_keys=[])
 
@@ -723,27 +731,27 @@ class FileGraphProvider(BaseGraphProvider):
         self._dataloader = DataLoader(self._dataset, **loader_kwargs)
 
         # Peek at the first graph to derive metadata
-        first_graph = self._dataset[0]
+        first_graph = self._dataset[self.names[0]].cuda(non_blocking=True)
         self._init_from_graph(first_graph)
 
     def _init_from_graph(self, graph: HeteroData) -> None:
         """Derive src_size, dst_size, edge_attributes, trainable_size from a graph."""
         # --- src_size / dst_size ---
-        self.src_size = getattr(graph, "src_size", None)
-        self.dst_size = getattr(graph, "dst_size", None)
+        print("graph", graph)
+        print("graph src_name", self.src_name)
+        print("graph dst_name", self.dst_name)
+        print(graph[self.src_name])
+        self.src_size = graph[self.src_name].num_nodes
+        self.dst_size = graph[self.dst_name].num_nodes
+        
+        print(self.src_size, self.dst_size)
         assert (
             self.src_size is not None or self.dst_size is not None
         ), "Graph must have at least one of src_size or dst_size attributes"
-
-        self.edge_attributes: list[str] = getattr(graph, "edge_attribute_names", None)
-        assert (
-            self.edge_attributes is not None
-        ), "Graph must have 'edge_attribute_names' attribute listing edge attribute tensor names"
-
-        edge_attr_tensor = torch.cat([graph[attr] for attr in self.edge_attributes], axis=1)
-
-        # --- trainable_size ---
-        self.trainable_size: int = int(getattr(graph, "trainable_size", 0))
+        print("graph edge attributes:", self.edge_attributes)
+        print(graph[self.edge_attributes[0]])
+        print(type(graph[self.edge_attributes[0]]))
+        edge_attr_tensor = torch.cat([graph[(self.src_name, "to", self.dst_name)][attr] for attr in self.edge_attributes], axis=1)
 
         self._edge_dim = edge_attr_tensor.shape[1] + self.trainable_size
 
@@ -775,16 +783,13 @@ class FileGraphProvider(BaseGraphProvider):
 
     def __getitem__(self, index: int) -> HeteroData:
         """Get a specific graph by index."""
-        graph = self._dataset[index]
+        graph = self._dataset[self.names[index]][(self.src_name, "to", self.dst_name)]
         assert (
             graph.src_size == self.src_size
         ), f"Graph src_size {graph.src_size} does not match expected {self.src_size}"
         assert (
             graph.dst_size == self.dst_size
         ), f"Graph dst_size {graph.dst_size} does not match expected {self.dst_size}"
-        assert (
-            list(getattr(graph, "edge_attribute_names", [])) == self.edge_attributes
-        ), f"Graph edge_attribute_names {getattr(graph, 'edge_attribute_names', None)} do not match expected {self.edge_attributes}"
         assert (
             int(getattr(graph, "trainable_size", 0)) == self.trainable_size
         ), f"Graph trainable_size {getattr(graph, 'trainable_size', 0)} does not match expected {self.trainable_size}"
@@ -804,7 +809,8 @@ class FileGraphProvider(BaseGraphProvider):
         dst_coords: Optional[Tensor] = None,
         model_comm_group: Optional[ProcessGroup] = None,
         shard_edges: bool = True,
-        graph: Optional[HeteroData] = None,
+        graph_name: Optional[HeteroData] = None,
+        device: Optional[torch.device] = None,
     ) -> tuple[Tensor, Adj, Optional[ShardSizes]]:
         """Get edges from a specific loaded graph.
 
@@ -832,27 +838,43 @@ class FileGraphProvider(BaseGraphProvider):
         tuple[Tensor, Adj, Optional[ShardSizes]]
             Edge attributes, expanded edge index, and optional edge_shard_sizes.
         """
-        if graph is None:
-            graph = self._dataset[0]
+        print(f"Loading graph name'{graph_name}' from the dataset.")
+        print(self._dataset[graph_name])
+        print(self._dataset[graph_name][self.src_name])
+        print("graph src_name", self.src_name)
+        print("graph dst_name", self.dst_name)
+        full_graph = self._dataset[graph_name]
+        src_size = full_graph[self.src_name].num_nodes
+        dst_size = full_graph[self.dst_name].num_nodes
+        graph = self._dataset[graph_name][(self.src_name, "to", self.dst_name)].to(device)
 
         edge_attr = torch.cat([graph[attr] for attr in self.edge_attributes], axis=1)
-        edge_attr = self.trainable(edge_attr, batch_size)
+        edge_attr = self.trainable(edge_attr, batch_size).to(device)
 
         # Derive src/dst sizes from this specific graph (may differ across files)
-        src_size = int(getattr(graph, "src_size", graph.edge_index[0].max().item() + 1))
-        dst_size = int(getattr(graph, "dst_size", graph.edge_index[1].max().item() + 1))
+        # src_size = int(getattr(graph, "src_size", graph.edge_index[0].max().item() + 1))
+        # dst_size = int(getattr(graph, "dst_size", graph.edge_index[1].max().item() + 1))
+        
 
         edge_index = graph.edge_index
-        if batch_size > 1:
-            edge_inc = torch.tensor([[src_size], [dst_size]], dtype=torch.int64, device=edge_index.device)
-            edge_index = torch.cat(
-                [edge_index + i * edge_inc for i in range(batch_size)],
-                dim=1,
-            )
-
+        edge_inc = torch.tensor([[src_size], [dst_size]], dtype=torch.int64, device=device)
+        edge_index = torch.cat(
+            [edge_index + i * edge_inc for i in range(batch_size)],
+            dim=1,
+        )
         if shard_edges:
+            print("src size * batch size", src_size * batch_size, "dst size * batch size", dst_size * batch_size)
+            print("edge index shape:", edge_index.shape, "edge attr shape:", edge_attr.shape)
+            print("edge_index device:", edge_index.device, "edge_attr device:", edge_attr.device)
+            print("edge_index dtype:", edge_index.dtype, "edge_attr dtype:", edge_attr.dtype)
+            edge_index = edge_index.to(torch.int64)
+            edge_attr = edge_attr.to(torch.float16)
+            # edge_attr = edge_attr.unsqueeze(1, dim=1)
+            print("edge_index after to int64 dtype:", edge_index.dtype)
             return shard_edges_1hop(
                 edge_attr, edge_index, src_size * batch_size, dst_size * batch_size, model_comm_group
             )
-
+            print("edge_index dtype:", edge_index.dtype, "edge_attr dtype:", edge_attr.dtype)
+        del graph
+        del full_graph
         return edge_attr, edge_index, None

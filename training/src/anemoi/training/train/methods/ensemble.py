@@ -76,6 +76,8 @@ class EnsembleTraining(BaseTrainingModule):
         self.model_comm_group_size = config.system.hardware.num_gpus_per_model
         num_gpus_per_model = config.system.hardware.num_gpus_per_model
         num_gpus_per_ensemble = config.system.hardware.num_gpus_per_ensemble
+        print("Number of gpus per member", num_gpus_per_ensemble)
+        print("Number of gpus per model", num_gpus_per_model)
 
         assert num_gpus_per_ensemble % num_gpus_per_model == 0, (
             "Invalid ensemble vs. model size GPU group configuration: "
@@ -97,6 +99,7 @@ class EnsembleTraining(BaseTrainingModule):
 
         self.nens_per_device = config.training.ensemble_size_per_device
         self.nens_per_group = self.nens_per_device * num_gpus_per_ensemble // num_gpus_per_model
+        
         LOGGER.info("Ensemble size: per device = %d, per ens-group = %d", self.nens_per_device, self.nens_per_group)
 
         # lazy init ensemble group info, will be set by the DDPEnsGroupStrategy:

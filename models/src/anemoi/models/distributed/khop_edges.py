@@ -89,6 +89,7 @@ def sort_edges_1hop_sharding(
     """
     if mgroup:
         num_chunks = dist.get_world_size(group=mgroup)
+        print(f"Sorting edges into {num_chunks} chunks for 1-hop sharding across GPUs.")
 
         edge_attr_list, edge_index_list = sort_edges_1hop_chunks(
             num_nodes, edge_attr, edge_index, num_chunks, relabel_dst_nodes=relabel_dst_nodes

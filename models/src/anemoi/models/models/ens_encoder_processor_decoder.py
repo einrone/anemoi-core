@@ -61,7 +61,7 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             model_config.model.noise_injector,
             _recursive_=False,
             num_channels=self.num_channels,
-            graph_data=self._graph_data,
+            graph_data=self._graph_data_dict,
         )
 
     def _calculate_input_dim(self, dataset_name: str) -> int:
@@ -204,8 +204,10 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
 
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_ens_size)
         shard_sizes_hidden = get_shard_sizes(x_hidden_latent, 0, model_comm_group)
+        print("shard sizes hidden:", shard_sizes_hidden)
         x_hidden_latent = shard_tensor(x_hidden_latent, 0, shard_sizes_hidden, model_comm_group)
         for dataset_name in dataset_names:
+            print("Device from which the sample is from: ", x[dataset_name].device)
             x_data_latent, x_skip, shard_sizes_data = self._assemble_input(
                 x[dataset_name],
                 fcstep=fcstep,
@@ -214,6 +216,7 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 model_comm_group=model_comm_group,
                 dataset_name=dataset_name,
             )
+            print("shard sizes data:", shard_sizes_data)
             x_skip_dict[dataset_name] = x_skip
             shard_sizes_data_dict[dataset_name] = shard_sizes_data
 
@@ -222,16 +225,30 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             ].get_edges(
                 batch_size=batch_ens_size,
                 model_comm_group=model_comm_group,
+                device=x[dataset_name].device,
+                graph_name=dataset_name,
             )
+            print(f"Encoder edge_attr shape: {encoder_edge_attr.shape}, encoder_edge_index shape: {encoder_edge_index.shape}")
+            print(f"Encoder edge_attr device: {encoder_edge_attr.device}, encoder_edge_index device: {encoder_edge_index.device}")
+            print(f"Encoder edge_attr dtype: {encoder_edge_attr.dtype}, encoder_edge_index dtype: {encoder_edge_index.dtype}")
+
 
             enc_shard_info = BipartiteGraphShardInfo(
                 src_nodes=shard_sizes_data_dict[dataset_name],  # None if not sharded
                 dst_nodes=shard_sizes_hidden,
                 edges=enc_edge_shard_sizes,
             )
+            print("enc_shard_info:", enc_shard_info)
 
             # Encoder for this dataset
-            x_data_latent, x_latent = self.encoder[dataset_name](
+            print("encoder", self.encoder.keys())
+            print("dataset name", dataset_name)
+            print(f"Encoder for dataset {dataset_name}: x_data_latent shape: {x_data_latent.shape}, x_hidden_latent shape: {x_hidden_latent.shape}")    
+            print(f"Encoder edge_attr device: {encoder_edge_attr.device}, encoder_edge_index device: {encoder_edge_index.device}")
+            print(f"Model comm group: {model_comm_group}")
+            # Encoder for this dataset
+            encoder_name = self.dataset2encoder[dataset_name]
+            x_data_latent, x_latent = self.encoder[encoder_name](
                 (x_data_latent, x_hidden_latent),
                 batch_size=batch_ens_size,
                 shard_info=enc_shard_info,
@@ -258,6 +275,8 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         processor_edge_attr, processor_edge_index, proc_edge_shard_sizes = self.processor_graph_provider.get_edges(
             batch_size=batch_ens_size,
             model_comm_group=model_comm_group,
+            device=x[dataset_name].device,
+            graph_name=dataset_name,
         )
         processor_kwargs = {"cond": latent_noise} if latent_noise is not None else {}
 
@@ -283,6 +302,8 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             ].get_edges(
                 batch_size=batch_ens_size,
                 model_comm_group=model_comm_group,
+                device=x[dataset_name].device,
+                graph_name=dataset_name,
             )
 
             dec_shard_info = BipartiteGraphShardInfo(
@@ -291,7 +312,8 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 edges=dec_edge_shard_sizes,
             )
 
-            x_out = self.decoder[dataset_name](
+            decoder_name = self.dataset2decoder[dataset_name]
+            x_out = self.decoder[decoder_name](
                 (x_latent, x_data_latent_dict[dataset_name]),
                 batch_size=batch_ens_size,
                 shard_info=dec_shard_info,
@@ -309,5 +331,4 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 dtype=x[dataset_name].dtype,
                 dataset_name=dataset_name,
             )
-
         return x_out_dict

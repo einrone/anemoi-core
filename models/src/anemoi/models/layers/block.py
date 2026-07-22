@@ -546,6 +546,9 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
         self.lin_self = Linear(in_channels, num_heads * self.out_channels_conv, bias=bias)
         self.lin_edge = Linear(edge_dim, num_heads * self.out_channels_conv)  # , bias=False)
 
+        self.lin_beta = Linear(3 * out_channels, 1, bias=False)
+        #nn.init.constant_(self.lin_beta.weight, 0.0)
+
         self.projection = Linear(self.attn_channels, out_channels)
 
         if self.qk_norm:
@@ -685,12 +688,30 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
             self._attention_backend_applied = True
 
         if self.graph_attention_backend == "triton":
+            # Ensure contiguous memory layout for ALL tensors passed to Triton kernel
+            edges = edges.contiguous()
+            
             csc, perm, reverse = edge_index_to_csc(edge_index, num_nodes=conv_size, reverse=True)
+            
+            # Ensure CSC indices (column pointers and row indices) are contiguous
+            csc = (csc[0].contiguous(), csc[1].contiguous())
+            # Ensure reverse tuple elements are contiguous (reverse is a tuple)
+            if isinstance(reverse, tuple):
+                reverse = tuple(r.contiguous() if isinstance(r, Tensor) else r for r in reverse)
+            else:
+                reverse = reverse.contiguous()
+            
             edges_csc = edges.index_select(0, perm)
+            edges_csc = edges_csc.contiguous()
             args_conv = (edges_csc, csc, reverse)
         else:
             args_conv = (edges, edge_index, conv_size)
-
+            print("edges shape:", edges.shape)
+            print("edge_index shape:", edge_index.shape)
+            print("conv_size:", conv_size)
+        print("query shape:", query.shape)
+        print("key shape:", key.shape)
+        print("value shape:", value.shape)
         return self.conv(query, key, value, *args_conv)
 
     def attention_block(
@@ -1029,7 +1050,24 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         out = self.shard_output_seq(out, bipartite_shard_info, head_shard_sizes, batch_size, model_comm_group)
 
         # out = self.projection(out + x_r) in chunks:
-        out = torch.cat([self.projection(chunk) for chunk in torch.tensor_split(out + x_r, num_chunks, dim=0)], dim=0)
+        out_chunks = torch.tensor_split(out, num_chunks, dim=0)
+        x_r_chunks = torch.tensor_split(x_r, num_chunks, dim=0)
+        out_new_chunks = []
+
+        for out_chunk, x_r_chunk in zip(out_chunks, x_r_chunks):
+            beta = torch.sigmoid(
+                self.lin_beta(
+                    torch.cat([out_chunk, x_r_chunk, out_chunk - x_r_chunk], dim=-1)
+                )
+            )
+
+            out_chunk_new = beta * x_r_chunk + (1.0 - beta) * out_chunk
+
+            out_proj = self.projection(out_chunk_new)
+
+            out_new_chunks.append(out_proj)
+        out = torch.cat(out_new_chunks, dim=0)
+        # out = torch.cat([self.projection(chunk) for chunk in torch.tensor_split(out + x_r, num_chunks, dim=0)], dim=0)
 
         out = out + x_skip
         nodes_new = self.run_node_dst_mlp(out, **cond_kwargs) + out

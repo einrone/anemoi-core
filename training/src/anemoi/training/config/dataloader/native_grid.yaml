@@ -45,14 +45,16 @@ limit_batches:
 # ============
 
 # Pointers to datasets and model run info
-dataset: ${system.input.dataset}
+# dataset: null
+#${system.input.dataset}
 model_run_info: null  # Add for non-analysis training
 
 training:
   datasets:
     data:
       dataset_config:
-        dataset: ${dataloader.dataset}
+        dataset: null
+        #${dataloader.dataset}
         frequency: ${data.frequency}
         drop: []
       start: null
@@ -60,23 +62,25 @@ training:
       trajectory: ${dataloader.model_run_info}
 
 validation:
-  datasets:
-    data:
-      dataset_config:
-        dataset: ${dataloader.dataset}
-        frequency: ${data.frequency}
-        drop: []
-      start: 2021
-      end: 2021
-      trajectory: ${dataloader.model_run_info}
+  datasets: null
+    # data:
+    #   dataset_config:
+    #     dataset: null
+    #     #${dataloader.dataset}
+    #     frequency: ${data.frequency}
+    #     drop: []
+    #   start: 2021
+    #   end: 2021
+    #   trajectory: ${dataloader.model_run_info}
 
 test:
-  datasets:
-    data:
-      dataset_config:
-        dataset: ${dataloader.dataset}
-        frequency: ${data.frequency}
-        drop: []
-      start: 2022
-      end: null
-      trajectory: ${dataloader.model_run_info}
+  datasets: null
+    # data:
+    #   dataset_config:
+    #     dataset: null
+    #     #${dataloader.dataset}
+    #     frequency: ${data.frequency}
+    #     drop: []
+    #   start: 2022
+    #   end: null
+    #   trajectory: ${dataloader.model_run_info}

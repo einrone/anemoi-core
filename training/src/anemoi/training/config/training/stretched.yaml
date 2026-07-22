@@ -76,10 +76,10 @@ validation_metrics:
         _target_: anemoi.training.losses.MSELoss
         scalers: ["outside_lam_mask", "node_weights", "time_steps"]
         ignore_nans: True
-      mse_inside_lam:
-        _target_: anemoi.training.losses.MSELoss
-        scalers: ["lam_node_weights", "time_steps"]
-        ignore_nans: True
+      # mse_inside_lam:
+      #   _target_: anemoi.training.losses.MSELoss
+      #   scalers: ["lam_node_weights", "time_steps"]
+      #   ignore_nans: True
 
 # Variable groups definition for scaling
 # The variable level scaling methods are defined under training/scalers

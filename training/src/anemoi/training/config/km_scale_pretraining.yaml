@@ -1,0 +1,245 @@
+defaults:
+- data: zarr
+- dataloader: native_grid
+- diagnostics: evaluation_multi
+- graph: stretched_grid
+- model: graphtransformer_ens
+- system: example
+- task: forecaster
+- training: stretched
+- _self_
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+config_validation: False
+
+diagnostics:
+  log:
+    mlflow:
+      enabled: True
+      offline: True
+      authentication: True
+      tracking_uri: https://mlflow.ecmwf.int
+      experiment_name: 'multi-domain-experiments'
+      run_name: test_graphprovider
+      system: False
+      terminal: False
+      max_params_length: 16000
+    interval: 10 #100
+    wandb:
+      entity: null
+      enabled: False
+  plot:
+    callbacks: []
+  checkpoint:
+    every_n_minutes:
+      save_frequency: 30
+      num_models_saved: 1
+    every_n_epochs:
+      save_frequency: 1
+      num_models_saved: 1
+
+data:
+  processors:
+    normalizer:
+      learnable: False
+  resolution: None
+  forcing:
+    - "cos_latitude"
+    - "cos_longitude"
+    - "sin_latitude"
+    - "sin_longitude"
+    - "cos_julian_day"
+    - "cos_local_time"
+    - "sin_julian_day"
+    - "sin_local_time"
+    - "insolation"
+    - "lsm"
+    - "z"
+  diagnostic:
+    - "tp"
+    - "ssrd"
+    - "strd"
+  normalizer:
+    max:
+    - "z"
+    none:
+    - "cos_latitude"
+    - "cos_longitude"
+    - "sin_latitude"
+    - "sin_longitude"
+    - "cos_julian_day"
+    - "cos_local_time"
+    - "sin_julian_day"
+    - "sin_local_time"
+    - "insolation"
+    - "lsm"
+    - "lcc"
+    - "mcc"
+    - "hcc"
+    - "tcc"
+
+system:
+  output: 
+    root: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/output/
+    logs: 
+      root: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/output/logs/
+  input:
+    graph: /leonardo_work/DestE_340_26/users/sbuurman/graphs/hectometric/res6_10
+    warm_start: null
+    dataset: ${dataloader.training.datasets.de330_2024120400_2024120600_1h_ALARO_500m_storm2_v2.dataset_config}
+  files:
+    dataset: null
+    graph: null
+    warm_start: null
+  hardware:
+    num_gpus_per_node: 4 #${oc.decode:${oc.env:SLURM_GPUS_PER_NODE}}
+    num_nodes: 2 #${oc.decode:${oc.env:SLURM_NNODES}}
+    num_gpus_per_model: 4 #16
+    num_gpus_per_ensemble: 8 #32 # ???
+
+graph:
+  overwrite: False
+  nodes:
+    hidden:
+      node_builder:
+        lam_resolution: 10
+        global_resolution: 6
+        margin_radius_km: 20
+
+
+dataloader:
+  training:
+    datasets: 
+      de330_2024120400_2024120600_1h_ALARO_500m_storm2_v2:
+        encoder: 0
+        decoder: 0
+        dataset_config: 
+          dataset:
+            cutout:
+              - dataset: /leonardo_work/DestE_340_26/users/mvangind/hecto_decumulation/hecto_decumulated/de330_ALARO_500m_storm2_2024120400_2024120600-1h-v2.zarr
+                rescale: {
+                  "tcc": {"scale": 0.01, "offset": 0}, 
+                  "hcc": {"scale": 0.01, "offset": 0}, 
+                  "mcc": {"scale": 0.01, "offset": 0}, 
+                  "lcc": {"scale": 0.01, "offset": 0},
+                  "tp": {"scale": 0.001, "offset": 0}
+                  }
+                #thinning: 4
+              - dataset: /leonardo_work/DestE_340_26/ai-ml/datasets/aifs-od-an-oper-0001-mars-n320-2016-2025-6h-v1-combined-land.zarr
+                drop: [cp, q_250, q_50, q_600, sdor, slor, stl1, swvl1, t_250, t_50, t_600, tcw, u_250, u_50, u_600, v_250, v_50, v_600, w_250, w_50, w_600, z_250, z_50, z_600]
+                reorder: sort
+            min_distance_km: 20
+            adjust: all
+            reorder: sort
+            statistics:
+              join:
+                - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2022-6h-v6.zarr
+                  drop: [cp, slor, sdor, tcw, q_50, q_250, q_600, t_50, t_250, t_600, u_50, u_250, u_600, v_50, v_250, v_600, w_50, w_250, w_600, z_50, z_250, z_600]
+                  reorder: sort
+                - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2023-6h-v1-land.zarr
+                  select: [lcc, mcc, hcc, tcc, strd, ssrd]
+                  # select: [lcc, mcc, hcc, tcc]
+              adjust: ["start", "end"]
+              reorder: sort
+        start: 2024-12-04
+        end: 2024-12-06
+  validation: ${dataloader.training}
+
+  test: 
+    datasets: ${dataloader.training}
+
+  read_group_size: ${system.hardware.num_gpus_per_model}
+  batch_size:
+    training: 1
+    validation: 1
+    test: 1
+  num_workers:
+    training: 1 #1
+    validation: 1 #1
+    test: 1
+    predict: 1
+
+model:
+  dynamic_mode: True
+  num_channels: 1024
+  keep_batch_sharded: False # <-- for CRPS+FFT it is required
+  trainable_parameters:
+    data: 0
+    hidden: 0
+    data2hidden: 0
+    hidden2data: 0
+    hidden2hidden: 0
+  encoder:
+    num_chunks: 16
+  decoder:
+    num_chunks: 16
+  processor:
+    num_chunks: 16
+  bounding:
+    - _target_: anemoi.models.layers.bounding.ReluBounding #[0, infinity)
+      variables:
+      - tp
+      - ssrd
+      - strd
+    - _target_: anemoi.models.layers.bounding.HardtanhBounding #[min_val, max_val]
+      variables:
+      - tcc
+      - hcc
+      - mcc
+      - lcc
+      min_val: 0
+      max_val: 1
+
+training:
+  run_id: 84de27676b254ef39f15210dec79551a
+  #467ff6a23a454a338838b3246b520d11
+  fork_run_id: 
+  # 4e0cfed768bc445c9d88a3d450e24ec6
+  #1f404692ab324b3b98c9c4f86274814f #a088b36da03241d58f2dd24a462fdbba
+  #51e225bccd9143f9bf12ed251a8f00ed
+  transfer_learning: False
+  load_weights_only: False
+  max_epochs: null
+  max_steps: 9000
+  lr:
+    rate: 1e-5
+    min: 3e-7 #3e-7
+    warmup: 10
+  per_domain_weight_frac_of_total: 0.60 # Try 60 percent # Try dropout 
+  ensemble_size_per_device: 1
+  scalers:
+    general_variable:
+      weights:
+        default: 1
+        q: 0.6 #1
+        t: 6   #1
+        u: 0.8 #0.5
+        v: 0.5 #0.33
+        w: 0.001
+        z: 12  #1
+        sp: 10
+        10u: 0.1
+        10v: 0.1
+        2d: 0.5
+        tp: 0.025
+        cp: 0.0025
+        ssrd: 0
+        strd: 0
+  training_loss:
+    _target_: anemoi.training.losses.CombinedLoss
+    datasets :
+      de330_2024120400_2024120600_1h_ALARO_500m_storm2_v2:
+        _target_: anemoi.training.losses.CombinedLoss
+        losses:
+          - _target_: anemoi.training.losses.CRPS 
+            alpha: 0.95
+            scalers: ['pressure_level', 'general_variable', 'nan_mask_weights', 'node_weights']
+          - _target_: anemoi.training.losses.SpectralCRPSLoss
+            alpha: 0.95
+            scalers: ['pressure_level', 'general_variable', 'nan_mask_weights']
+        scalers: ['*']
+        loss_weights: [1.0, 1.0]

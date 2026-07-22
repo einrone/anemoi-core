@@ -1,6 +1,6 @@
 ---
 defaults:
-  - scalers: global
+  - scalers: stretched
   - training_loss: ensemble
   - optimization: default
   - weight_averaging: null
@@ -35,7 +35,7 @@ gradient_clip:
 training_method: anemoi.training.train.methods.EnsembleTraining
 
 # number of ensemble members per device
-ensemble_size_per_device: 4
+ensemble_size_per_device: 1
 
 # select strategy
 strategy:

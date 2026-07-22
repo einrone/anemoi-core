@@ -78,7 +78,6 @@ class AnemoiTrainer(ABC):
             LOGGER.info("Dynamic mode enabled.")
 
             pc = ProcessConfigs(base_config=config, hectometric=hectometric)
-            pc.process
             config = pc.update()
 
         if config.config_validation:
@@ -231,23 +230,26 @@ class AnemoiTrainer(ABC):
                 ):
                     data_node_cfg.node_builder.dataset = dataset_path
             else:
-                msg = (
-                    "Multiple datasets require a fused graph config with one node group per dataset. "
-                    f"Received datasets {dataset_names} but graph nodes "
-                    f"{list(graph_cfg.nodes.keys())}."
-                )
-                raise ValueError(msg)
+                # multi-domain setup, return path where to find graphs
+                return save_path
+                # msg = (
+                #     "Multiple datasets require a fused graph config with one node group per dataset. "
+                #     f"Received datasets {dataset_names} but graph nodes "
+                #     f"{list(graph_cfg.nodes.keys())}."
+                # )
+                # raise ValueError(msg)
 
         # Try loading existing saved graph before rebuilding.
         overwrite = graph_cfg.get("overwrite", False)
         if save_path and save_path.exists() and not overwrite:
-            if save_path.endswith(".pt"):
+            if save_path.suffix == ".pt":
                 fused = uses_fused_dataset_graph(graph_cfg, dataset_names)
                 required = dataset_names if fused else [DEFAULT_DATASET_NAME]
                 graph = load_graph_from_file(save_path)
                 validate_loaded_graph(graph, required)
                 return graph
-            # Assume the filename is a path: return path for graph provider
+            # Assume the filename is a path or a dict of paths: return path for graph provider
+            # File loading might not be necessary for regular multi-domain
             return save_path
 
         return GraphCreator(graph_config).create(save_path=save_path, overwrite=overwrite)

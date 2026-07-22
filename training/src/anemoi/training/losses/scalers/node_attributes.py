@@ -94,6 +94,9 @@ class ReweightedGraphNodeAttributeScaler(GraphNodeAttributeScaler):
             norm=norm,
             **kwargs,
         )
+        print("graph", graph_data)
+        print("nodes name", nodes_name)
+        print("nodes", self.nodes)
         if self.scaling_mask_attribute_name not in self.nodes.node_attrs():
             error_msg = f"{self.__class__.__module__}.{self.__class__.__name__}: "
             error_msg += f"scaling_mask_attribute_name '{self.scaling_mask_attribute_name}' not found in graph_data - "

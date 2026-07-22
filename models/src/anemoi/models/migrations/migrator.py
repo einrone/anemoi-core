@@ -20,6 +20,7 @@ from collections.abc import MutableMapping
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import cached_property
 from inspect import getsource
 from os import PathLike
 from pathlib import Path
@@ -28,7 +29,11 @@ from typing import Any
 from typing import TypedDict
 
 from anemoi.models import __version__
+from anemoi.models.migrations.setup_context import DeserializeMigrationContext
 from anemoi.models.migrations.setup_context import MigrationContext
+from anemoi.models.migrations.setup_context import ReversedSetupCallback
+from anemoi.models.migrations.setup_context import SerializedMigrationContext
+from anemoi.models.migrations.setup_context import serialize_setup_callback
 
 MIGRATION_PATH = Path(__file__).parent / "scripts"
 
@@ -71,6 +76,32 @@ class SerializedMigration(TypedDict):
     metadata: MigrationMetadata
     signature: str
     """ The signature of the script. Can be used to detect if a script changed. """
+    rollback: Callable[[CkptType], CkptType] | None
+    """ The rollback function stored as value """
+    setup_context: SerializedMigrationContext | None
+    """ The setup callback for the rollback method """
+
+
+class _SerializedRollback:
+    """Use cloudpickle to serialize the rollback function by value and not reference.
+    When doing rollbacks, migration files might not exist anymore, and we need to
+    execute the migration from the checkpoint directly.
+    """
+
+    def __init__(self, rollback_bytes: bytes):
+        self._rollback_bytes = rollback_bytes
+
+    @cached_property
+    def rollback(self) -> Callable[[CkptType], CkptType]:
+        import cloudpickle
+
+        return cloudpickle.loads(self._rollback_bytes)
+
+    def __call__(self, ckpt: CkptType) -> CkptType:
+        return self.rollback(ckpt)
+
+    def __reduce__(self) -> tuple[Callable[[bytes], _SerializedRollback], tuple[bytes]]:
+        return self.__class__, (self._rollback_bytes,)
 
 
 @dataclass
@@ -88,6 +119,8 @@ class Migration:
     migrate_setup: Callable[[MigrationContext], None] | None = None
     """Setup function to execute before loading the checkpoint. This can be used to
     mock missing modules or Attributes."""
+    rollback: Callable[[CkptType], CkptType] | None = None
+    """Callback to execute a migration rollback"""
 
     @classmethod
     def from_serialized(cls, migration: SerializedMigration) -> Migration:
@@ -105,7 +138,17 @@ class Migration:
         Migration
             The migration.
         """
-        return Migration(migration["name"], migration["metadata"], migration["signature"], None)
+        migration_setup = None
+        if migration["setup_context"] is not None:
+            migration_setup = DeserializeMigrationContext(migration["setup_context"])
+        return Migration(
+            migration["name"],
+            migration["metadata"],
+            migration["signature"],
+            None,
+            migration_setup,
+            migration["rollback"],
+        )
 
     def serialize(self) -> SerializedMigration:
         """Serialize this migration
@@ -115,20 +158,41 @@ class Migration:
         SerializedMigration
             The serialized dict to store in the checkpoint.
         """
+        import cloudpickle
 
+        serialized_rollback: _SerializedRollback | None = None
+        if self.rollback is not None:
+            cloudpickle.register_pickle_by_value(sys.modules[self.rollback.__module__])
+            rollback_bytes = cloudpickle.dumps(self.rollback)
+            serialized_rollback = _SerializedRollback(rollback_bytes)
+        serialized_rollback_setup: SerializedMigrationContext | None = None
+        if self.migrate_setup is not None:
+            serialized_rollback_setup = serialize_setup_callback(self.migrate_setup)
         return {
             "name": self.name,
             "metadata": self.metadata,
             "signature": self.signature,
+            "rollback": serialized_rollback,
+            "setup_context": serialized_rollback_setup,
         }
 
 
 @dataclass
-class MigrationOp:
-    """Migration Operation"""
+class BaseOp:
+    """Base class for operations."""
 
     run: Callable[[CkptType], CkptType]
     migration: Migration
+
+
+@dataclass
+class MigrationOp(BaseOp):
+    """Migration Operation"""
+
+
+@dataclass
+class RollbackOp(BaseOp):
+    """Rollback Operation"""
 
 
 def _get_code_digest(content: str) -> str:
@@ -184,6 +248,10 @@ def _migrations_from_path(location: str | PathLike, package: str) -> list[Migrat
             args["migrate"] = migration.migrate
         if hasattr(migration, "migrate_setup"):
             args["migrate_setup"] = migration.migrate_setup
+        if hasattr(migration, "rollback"):
+            args["rollback"] = migration.rollback
+        if hasattr(migration, "rollback_setup"):
+            args["rollback_setup"] = migration.rollback_setup
 
         if args["metadata"].versions["anemoi-models"] == "%NEXT_ANEMOI_MODELS_VERSION%":
             args["metadata"].versions["anemoi-models"] = __version__
@@ -195,16 +263,13 @@ def _migrations_from_path(location: str | PathLike, package: str) -> list[Migrat
 class MissingAttribute:
     """Placeholder type when encountering ImportError or AttributeError in Unpickler.find_class"""
 
-    def __init__(self, *args, **kwargs):
-        pass
 
-
-def _get_unpickler(replace_attrs: dict[str, list[str]] | bool = False):
+def _get_unpickler(replace_attrs: list[str] | bool = False):
     """Get the Unpickler
 
     Parameters
     ----------
-    replace_attrs : dict[str,list[str]] | bool, default False
+    replace_attrs : list[str] | bool, default False
         Replace the provided attrs by a ``MissingAttribute`` object. If False, Fill not
         try to replace attributes. If True, will replace every missing attribute. You can use
         * as a wildcard to be replaced by any attribute in a module.
@@ -226,27 +291,9 @@ def _get_unpickler(replace_attrs: dict[str, list[str]] | bool = False):
             except (ImportError, AttributeError) as e:
                 attr_name = f"{module_name}.{global_name}"
                 wild_name = f"{module_name}.*"
-
-                # For retro-compatibility with checkpoints with rollbacks (now removed from code)
-                if attr_name == "anemoi.models.migrations.migrator._SerializedRollback":
-                    return MissingAttribute
-
-                deleted_modules: list[str] = []
-                deleted_attributes: list[str] = []
-
-                # --- Normalize replace_attrs ---
-                if isinstance(replace_attrs, dict):
-                    deleted_modules = replace_attrs.get("deleted_modules", [])
-                    deleted_attributes = replace_attrs.get("deleted_attributes", [])
-
                 if replace_attrs is False:
                     raise e
-                if (
-                    replace_attrs is True
-                    or attr_name in deleted_attributes
-                    or module_name in deleted_modules
-                    or wild_name in replace_attrs
-                ):
+                if replace_attrs is True or attr_name in replace_attrs or wild_name in replace_attrs:
                     LOGGER.debug("Missing attribute %s.%s is checkpoint. Ignoring.", module_name, global_name)
                     return MissingAttribute
                 raise e
@@ -261,7 +308,7 @@ def _get_unpickler(replace_attrs: dict[str, list[str]] | bool = False):
     return UnpicklerWrapper
 
 
-def _load_ckpt(path: str | PathLike, replace_attrs: dict[str, list[str]] | bool = False) -> CkptType:
+def _load_ckpt(path: str | PathLike, replace_attrs: list[str] | bool = False) -> CkptType:
     """Loads a checkpoint
 
     Parameters
@@ -410,8 +457,8 @@ class Migrator:
             return None
         return self._grouped_migrations[group + 1][0].metadata.versions["anemoi-models"]
 
-    def _check_registered_script_changed(self, ckpt: CkptType, migrations: list[Migration]) -> bool:
-        """Checks whether the checkpoint has run a migration that was changed.
+    def _check_executed_migrations(self, ckpt: CkptType, migrations: list[Migration]) -> bool:
+        """Checks whether the checkpoint has run a migration that had its script changed.
         We use the signature stored in the history to detect it.
 
         Parameters
@@ -442,21 +489,25 @@ class Migrator:
                 has_run_modified_migrations = True
         return has_run_modified_migrations
 
-    def _resolve_migrations(
+    def _resolve_operations(
         self, ckpt: CkptType, migrations: list[Migration]
-    ) -> tuple[list[Callable[[MigrationContext], None]], list[MigrationOp], list[str]]:
+    ) -> tuple[list[Callable[[MigrationContext], None]], list[BaseOp]]:
         """Resolves the list of operations to execute to migrate the checkpoint.
-        If it contains extra migrations, fail, otherwise migrations are applied (starting from the beginning).
+        If it contains migrations and rollbacks, first rollbacked are applied (starting
+        from the end), then migrations are applied (starting from the beginning).
 
         The migrations in the checkpoint are compared with the ones in the ``migrations`` argument.
 
         For example for the migrations...
         in ``migrations``  | in the checkpoint
         A                  | A
-        C                  |
+        C                  | E (extra)
         D (extra)          |
 
         First backward with the checkpoint as reference:
+        * we need to rollback E
+        * A is ok because it's already synchronized
+        Then forward with ``migrations`` as reference:
         * A is already sync
         * then apply C and D.
 
@@ -469,17 +520,15 @@ class Migrator:
 
         Returns
         -------
-        tuple[list[Callable[[MigrationContext], None]], list[MigrationOp], list[str]]
+        tuple[list[Callable[[MigrationContext], None]], list[BaseOp]]
             The resolved operation (in order)
             * the list of setup callbacks to execute
-            * the list of migrations to execute
-            * the list of extra migrations in the checkpoint.
+            * the list of operations (migrate or rollback) to execute.
         """
         ckpt_migrations = self.registered_migrations(ckpt)
         setups: list[Callable[[MigrationContext], None]] = []
-        ops: list[MigrationOp] = []
+        ops: list[BaseOp] = []
         n_ckpt_migrations = len(ckpt_migrations)
-        extra_migrations: list[str] = []
         for k, ckpt_migration in enumerate(reversed(ckpt_migrations), 1):
             if (
                 len(migrations) > n_ckpt_migrations - k
@@ -487,12 +536,18 @@ class Migrator:
             ):
                 break
 
-            extra_migrations.append(ckpt_migration.name)
+            if ckpt_migration.rollback is None:
+                raise IncompatibleCheckpointException(
+                    f"{ckpt_migration.name} cannot bo rollbacked. Missing rollback function."
+                )
+            if ckpt_migration.migrate_setup is not None:
+                setups.append(ReversedSetupCallback(ckpt_migration.migrate_setup))
+            ops.append(RollbackOp(ckpt_migration.rollback, ckpt_migration))
 
-        num_extra_migration = len(extra_migrations)
+        num_rollbacks = len(ops)
         for k, migration in enumerate(migrations):
             if (
-                len(ckpt_migrations[: len(ckpt_migrations) - num_extra_migration]) > k
+                len(ckpt_migrations[: len(ckpt_migrations) - num_rollbacks]) > k
                 and migration.name == ckpt_migrations[k].name
             ):
                 continue
@@ -503,7 +558,7 @@ class Migrator:
             if migration.migrate_setup is not None:
                 setups.append(migration.migrate_setup)
             ops.append(MigrationOp(migration.migrate, migration))
-        return setups, ops, extra_migrations
+        return setups, ops
 
     def _resolve_context(self, context: MigrationContext) -> None:
         """Resolves the final context object after all setup callbacks have been executed.
@@ -515,11 +570,6 @@ class Migrator:
         context : MigrationContext
             The context object
         """
-        for module_path in getattr(context, "deleted_modules", []):
-            if module_path in sys.modules:
-                LOGGER.debug("Delete module %s.", module_path)
-                del sys.modules[module_path]
-
         for module_path_end, module_path_start in context.module_paths.items():
             LOGGER.debug("Move module %s to %s.", module_path_start, module_path_end)
             sys.modules[module_path_start] = sys.modules[module_path_end]
@@ -534,7 +584,7 @@ class Migrator:
             mod_start = sys.modules[attribute_path_start]
             setattr(mod_start, mod_name_start, attr_end)
 
-    def sync(self, path: str | PathLike) -> tuple[CkptType, CkptType, list[MigrationOp]]:
+    def sync(self, path: str | PathLike) -> tuple[CkptType, CkptType, list[BaseOp]]:
         """Migrate or rollbacks the checkpoint using provided migrations
 
         Parameters
@@ -544,11 +594,11 @@ class Migrator:
 
         Returns
         -------
-        tuple[CkptType, list[MigrationOp]]
+        tuple[CkptType, list[BaseOp]]
             * The original checkpoint (might have obfuscated attributes with `MissingAttribute`
                 if it cannot be imported
             * The migrated checkpoint
-            * The list of migrations
+            * The list of migrations or rollbacks
         """
         # First load the checkpoint and obfuscate any import issue, just to get the
         # migrations from the checkpoint. The real checkpoint is reloaded afterwards.
@@ -562,33 +612,34 @@ class Migrator:
                 f"Use a version of anemoi-models < {first_incompatible_version}."
             )
         compatible_migrations = self._grouped_migrations[-1]
-        self._check_registered_script_changed(ckpt, compatible_migrations)
-        setups, ops, extra_migrations = self._resolve_migrations(ckpt, compatible_migrations)
-        if len(extra_migrations):
-            extra_migration_str = ", ".join(extra_migrations)
-            raise IncompatibleCheckpointException(
-                f"Checkpoint cannot be migrated. Extra migrations are registered. ({extra_migration_str})"
-            )
-        replace_attrs: dict[str, list[str]] = {}
+        self._check_executed_migrations(ckpt, compatible_migrations)
+        setups, ops = self._resolve_operations(ckpt, compatible_migrations)
+        replace_attrs: list[str] = []
         if len(setups):
             context = MigrationContext()
             for setup in setups:
                 setup(context)
             self._resolve_context(context)
-            replace_attrs["deleted_modules"] = context.deleted_modules
-            replace_attrs["deleted_attributes"] = context.deleted_attributes
+            replace_attrs = context.deleted_attributes
         # Force reloading checkpoint without obfuscating import issues.
         ckpt = _load_ckpt(path, replace_attrs)
         ckpt["hyper_parameters"]["metadata"].setdefault("migrations", {}).setdefault("history", [])
         for op in ops:
-            ckpt = op.run(ckpt)
-            ckpt[_ckpt_migration_key].append(op.migration.serialize())
-            ckpt["hyper_parameters"]["metadata"]["migrations"]["history"].append(
-                {"type": "migrate", "name": op.migration.name, "signature": op.migration.signature}
-            )
+            if isinstance(op, RollbackOp):
+                ckpt = op.run(ckpt)
+                ckpt[_ckpt_migration_key].pop()
+                ckpt["hyper_parameters"]["metadata"]["migrations"]["history"].append(
+                    {"type": "rollback", "name": op.migration.name, "signature": op.migration.signature}
+                )
+            else:
+                ckpt = op.run(ckpt)
+                ckpt[_ckpt_migration_key].append(op.migration.serialize())
+                ckpt["hyper_parameters"]["metadata"]["migrations"]["history"].append(
+                    {"type": "migrate", "name": op.migration.name, "signature": op.migration.signature}
+                )
         return old_ckpt, ckpt, ops
 
-    def inspect(self, path: str | PathLike) -> tuple[list[Migration], list[Migration], list[str]]:
+    def inspect(self, path: str | PathLike) -> tuple[list[Migration], list[Migration], list[Migration]]:
         """Inspect migration information in checkpoint
 
         Parameters
@@ -598,10 +649,10 @@ class Migrator:
 
         Returns
         -------
-        tuple[list[Migration], list[Migration]]
-            * The list of already executed migrations,
-            * the list of missing migrations,
-            * the list of extra migrations in the checkpoint.
+        tuple[list[Migration], list[Migration], list[Migration]]
+            * The list of already executed migrations
+            * The list of missing migrations
+            * The list of extra migrations in the checkpoint (to rollback)
         """
         ckpt = _load_ckpt(path, replace_attrs=True)
         if not self.is_compatible_ckpt(ckpt):
@@ -612,10 +663,15 @@ class Migrator:
             )
         compatible_migrations = self._grouped_migrations[-1]
         registered_migrations = self.registered_migrations(ckpt)
-        _, ops, extra_migrations = self._resolve_migrations(ckpt, compatible_migrations)
+        _, ops = self._resolve_operations(ckpt, compatible_migrations)
         missing_migrations: list[Migration] = []
+        extra_migrations: list[Migration] = []
         for op in ops:
-            missing_migrations.append(op.migration)
+            if isinstance(op, RollbackOp):
+                extra_migrations.append(op.migration)
+                registered_migrations.pop()
+            elif isinstance(op, MigrationOp):
+                missing_migrations.append(op.migration)
         return registered_migrations, missing_migrations, extra_migrations
 
     def registered_migrations(self, ckpt: CkptType) -> list[Migration]:
@@ -675,6 +731,8 @@ class SaveCkpt:
                         "metadata", {"versions": {"migration": "1.0.0", "anemoi-models": "x.x.x"}}
                     ),
                     "signature": migration.get("signature", migration.get("name", "")),
+                    "rollback": migration.get("rollback", None),
+                    "setup_context": migration.get("setup_context", None),
                 }
             )
         ckpt["migrations"] = ckpt_migrations

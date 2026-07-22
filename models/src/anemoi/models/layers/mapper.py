@@ -308,6 +308,8 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
 
         # get subgraph of x_dst_chunk and incoming edges, drop unconnected src nodes
         nodes_src_full = torch.arange(size[0], device=edge_index.device)
+        print("edge index shape:", edge_index.shape, "edge_index device:", edge_index.device, "edge_index dtype:", edge_index.dtype)
+        print("dst_chunk shape:", dst_chunk.shape, "dst_chunk device:", dst_chunk.device, "dst_chunk dtype:", dst_chunk.dtype)
         edge_index, edge_attr = bipartite_subgraph(
             (nodes_src_full, dst_chunk),
             edge_index,
@@ -315,11 +317,15 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
             size=size,
             relabel_nodes=True,
         )
+        print("edges after bipartite_subgraph shape:", edge_attr.shape, "edge_attr device:", edge_attr.device, "edge_attr dtype:", edge_attr.dtype)
+        print("edge_index after bipartite_subgraph shape:", edge_index.shape, "edge_index device:", edge_index.device, "edge_index dtype:", edge_index.dtype)
 
         # drop unconnected src nodes and relabel edges
         x_src_chunk, edge_index_chunk, connected_src_nodes = drop_unconnected_src_nodes(x_src, edge_index, size)
         x_dst_chunk = x_dst[dst_chunk]
         chunk_size = (x_src_chunk.shape[0], x_dst_chunk.shape[0])
+        print("x_src_chunk shape:", x_src_chunk.shape, "x_src_chunk device:", x_src_chunk.device, "x_src_chunk dtype:", x_src_chunk.dtype)
+        print("x_dst_chunk shape:", x_dst_chunk.shape, "x_dst_chunk device:", x_dst_chunk.device, "x_dst_chunk dtype:", x_dst_chunk.dtype)
 
         if cond is not None:  # update cond with correct conditioning
             cond_src, cond_dst = cond
@@ -373,6 +379,7 @@ class GraphTransformerBaseMapper(BaseMapper, ABC):
         out_channels = self.out_channels_dst if self.out_channels_dst is not None else self.hidden_dim
         out_type = torch.get_autocast_gpu_dtype() if torch.is_autocast_enabled() else x_dst.dtype
         out_dst = torch.empty((*x_dst.shape[:-1], out_channels), device=x_dst.device, dtype=out_type)
+        print("out_dst shape:", out_dst.shape, "out_dst device:", out_dst.device, "out_dst dtype:", out_dst.dtype)
 
         for dst_chunk in dst_chunks:
             out_dst[dst_chunk] = maybe_checkpoint(

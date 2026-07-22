@@ -145,6 +145,8 @@ class FFT2D(SpectralTransform):
         data = torch.index_select(data, -2, torch.arange(*self.nodes_slice.indices(data.size(-2)), device=data.device))
 
         var = data.shape[-1]
+        print(f"x dimension: {self.x_dim}, y dimension: {self.y_dim}")
+        print(data.shape)
         try:
             data = einops.rearrange(data, "... (y x) v -> ... y x v", x=self.x_dim, y=self.y_dim, v=var)
         except Exception as e:

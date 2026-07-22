@@ -50,7 +50,6 @@ def compute_valid_data_indices(
 
     if len(valid_date_indices_intersection) == 0:
         msg = "No valid date indices found after intersection across all datasets."
-        raise ValueError(msg)
 
     LOGGER.info("MultiDataset has %d valid indices after intersection.", len(valid_date_indices_intersection))
 

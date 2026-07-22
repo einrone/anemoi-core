@@ -42,6 +42,7 @@ class NativeGridDataset(IterableDataset, ABC):
         data_readers: dict[str, BaseAnemoiReader],
         relative_date_indices: dict[str, TimeIndices],
         shuffle: bool = True,
+        label: str = "multi",
     ) -> None:
         """Initialize multi-dataset with synchronized data readers.
 
@@ -55,6 +56,7 @@ class NativeGridDataset(IterableDataset, ABC):
         """
         self.data_readers = data_readers
         self.shuffle = shuffle
+        self.label = label
         self.dataset_names = list(data_readers.keys())
         self._lazy_init_model_and_reader_group_info()
         self.relative_date_indices = relative_date_indices
@@ -71,7 +73,7 @@ class NativeGridDataset(IterableDataset, ABC):
         """Get valid date indices for each dataset."""
         # get dataset labels, encoder labels
         self.dataset_labels = list(self.data_readers.keys())
-        encoder_labels = {self.data_readers[dataset_label].get("encoder") for dataset_label in self.dataset_labels}
+        encoder_labels = {self.data_readers[dataset_label].encoder for dataset_label in self.dataset_labels}
 
         # Group datasets by encoder, will look like: {0: [dataset0], 1: [dataset1, dataset2]}
         datasets_per_encoder = {encoder_label: [] for encoder_label in encoder_labels}
@@ -79,7 +81,7 @@ class NativeGridDataset(IterableDataset, ABC):
             datasets_per_encoder[encoder_label] = [
                 dataset_label
                 for dataset_label in self.dataset_labels
-                if self.data_readers[dataset_label].get("encoder") == encoder_label
+                if self.data_readers[dataset_label].encoder == encoder_label
             ]
 
         # Create groups of datasets that will be sampled together
@@ -91,7 +93,7 @@ class NativeGridDataset(IterableDataset, ABC):
         self.valid_date_indices = {}
         for group, datasets_in_group in self.groups_dict.items():
             group_valid_date_indices = compute_valid_data_indices(
-                {dataset_label: self.data_readers[dataset_label]["dataset"] for dataset_label in datasets_in_group},
+                {dataset_label: self.data_readers[dataset_label] for dataset_label in datasets_in_group},
                 self.relative_date_indices,
             )
             if len(group_valid_date_indices) > 0:
@@ -376,7 +378,7 @@ class NativeGridDataset(IterableDataset, ABC):
         datasets_in_group = self.groups_dict[group_name]
         x = {}
         for name in datasets_in_group:
-            dataset = self.data_readers[name]["dataset"]
+            dataset = self.data_readers[name]
             time_step = offset_time_indices(int(i), self.relative_date_indices[name])
             if self.shard_shapes is not None and self.shard_shapes[name] is not None:
                 start, end = get_partition_range(self.shard_shapes[name], self.reader_group_rank)
@@ -409,6 +411,19 @@ class NativeGridDataset(IterableDataset, ABC):
         )
 
         for i in shuffled_chunk_indices:
+            LOGGER.debug(
+            (
+                "Worker pid %d yielding sample for index %s, worker id %d, global_rank %d, "
+                "model comm group %d, group_rank %d, seed comm group id %d"
+            ),
+            os.getpid(),
+            i,
+            self.worker_id,
+            self.global_rank,
+            self.model_comm_group_id,
+            self.model_comm_group_rank,
+            self.sample_comm_group_id,
+        )
             yield self.get_sample(i)
 
     def __repr__(self) -> str:

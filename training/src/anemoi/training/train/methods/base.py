@@ -16,6 +16,7 @@ from abc import abstractmethod
 from functools import cached_property
 from typing import TYPE_CHECKING
 from typing import Any
+from os import PathLike
 
 import pytorch_lightning as pl
 import torch
@@ -31,6 +32,7 @@ from anemoi.models.distributed.balanced_partition import get_balanced_partition_
 from anemoi.models.distributed.balanced_partition import get_partition_range
 from anemoi.models.distributed.graph import gather_tensor
 from anemoi.models.interface import AnemoiModelInterface
+from anemoi.models.layers.graph_provider import _GraphFileDataset
 from anemoi.models.utils.config import get_multiple_datasets_config
 from anemoi.training.losses import get_loss_function
 from anemoi.training.losses.base import BaseLoss
@@ -172,16 +174,19 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         super().__init__()
         self.task = task
 
-        assert isinstance(graph_data, HeteroData), "graph_data must be a HeteroData object"
+        assert isinstance(graph_data, HeteroData) or isinstance(graph_data, PathLike), "graph_data must be a HeteroData object or a path to .pt files"
         assert isinstance(data_indices, dict), "data_indices must be a dict keyed by dataset name"
-
-        graph_data = graph_data.to(self.device)
+        if isinstance(graph_data, PathLike):
+            self._graph_data_dict = _GraphFileDataset(graph_data)
+        else:
+            self.graph_data = graph_data.to(self.device)
         self.dataset_names = list(data_indices.keys())
+        print("dataset names", self.dataset_names)
 
         # Create output_mask dictionary for each dataset
         self.output_mask = {
-            name: instantiate(config.model.output_mask, nodes=graph_data[name]) for name in self.dataset_names
-        }
+            name: instantiate(config.model.output_mask, nodes=self._graph_data_dict[name]) for name in self.dataset_names
+        } #VERY INEFFICIENT, can we get all these attributes once instead of looping every time?
 
         # Handle supporting_arrays merge with all output masks
         combined_supporting_arrays = supporting_arrays.copy()
@@ -231,8 +236,10 @@ class BaseTrainingModule(pl.LightningModule, ABC):
 
             self.target_dataset_names.append(dataset_name)
 
-            fused = uses_fused_dataset_graph(graph_data, self.dataset_names)
+            fused = uses_fused_dataset_graph(self._graph_data_dict[self.dataset_names[0]], self.dataset_names)
+            print("fused", fused)
             data_node_name = dataset_name if fused else DEFAULT_DATASET_NAME
+            print("data node name", data_node_name)
 
             # Create dataset-specific metadata extractor
             metadata_extractor = ExtractVariableGroupAndLevel(
@@ -244,13 +251,13 @@ class BaseTrainingModule(pl.LightningModule, ABC):
                 scalers_configs[dataset_name],
                 data_indices=data_indices[dataset_name],
                 task=self.task,
-                graph_data=graph_data,
+                graph_data=self._graph_data_dict[dataset_name],
                 statistics=statistics[dataset_name],
                 statistics_tendencies=(
                     statistics_tendencies[dataset_name] if statistics_tendencies is not None else None
                 ),
                 metadata_extractor=metadata_extractor,
-                nodes_name=dataset_name,
+                nodes_name=data_node_name,
                 output_mask=self.output_mask[dataset_name],
             )
             self.scalers[dataset_name] = dataset_scalers
@@ -266,7 +273,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
                 loss_configs[dataset_name],
                 dataset_scalers,
                 data_indices[dataset_name],
-                graph_data=graph_data,
+                graph_data=self._graph_data_dict[dataset_name],
                 data_node_name=data_node_name,
             )
 
@@ -274,7 +281,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
                 val_metrics_configs[dataset_name],
                 scalers=dataset_scalers,
                 data_indices=data_indices[dataset_name],
-                graph_data=graph_data,
+                graph_data=self._graph_data_dict[dataset_name],
                 data_node_name=data_node_name,
             )
             self._scaling_values_log[dataset_name] = print_variable_scaling(
@@ -303,9 +310,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
 
         self.shard_sizes, self.grid_sizes = {}, {}
         for dataset_name in self.dataset_names:
-            self.grid_sizes[dataset_name] = graph_data[
-                dataset_name
-            ].num_nodes  # TODO(Mario): Replace by dataset.grid_size
+            self.grid_sizes[dataset_name] = self._graph_data_dict[dataset_name].num_nodes  # TODO(Mario): Replace by dataset.grid_size
             self.shard_sizes[dataset_name] = get_balanced_partition_sizes(
                 self.grid_sizes[dataset_name],
                 reader_group_size,
@@ -456,10 +461,13 @@ class BaseTrainingModule(pl.LightningModule, ABC):
     def on_load_checkpoint(self, checkpoint: torch.nn.Module) -> None:
         self._update_checkpoint_state_dict_for_load(checkpoint)
 
-        self._ckpt_model_name_to_index = {
-            dataset_name: data_indices.name_to_index
-            for dataset_name, data_indices in checkpoint["hyper_parameters"]["data_indices"].items()
-        }
+        # self._ckpt_model_name_to_index = {
+        #     dataset_name: data_indices.name_to_index
+        #     for dataset_name, data_indices in checkpoint["hyper_parameters"]["data_indices"].items()
+        # }
+        self._ckpt_model_name_to_index = {}
+        for dataset in self.dataset_names:
+            self._ckpt_model_name_to_index[dataset] = checkpoint["hyper_parameters"]["data_indices"]
 
         # Extract variables_metadata for unit compatibility check
         self._ckpt_variables_metadata = extract_variables_metadata_from_checkpoint(
@@ -834,8 +842,9 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         assert isinstance(batch, dict), "batch must be a dict keyed by dataset name"
         self.grid_shard_sizes = {}
         self.grid_shard_slice = {}
+        print("dataset", batch.keys())
 
-        for dataset_name in self.dataset_names:
+        for dataset_name in batch.keys():
             if self.keep_batch_sharded and self.model_comm_group_size > 1:
                 self.grid_shard_sizes[dataset_name] = self.shard_sizes[dataset_name]
                 start, end = get_partition_range(

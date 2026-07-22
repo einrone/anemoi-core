@@ -85,8 +85,12 @@ class BaseAnemoiReader:
         dataset_config: str | dict | None = None,
         start: datetime.datetime | int | None = None,
         end: datetime.datetime | int | None = None,
+        encoder: int | None = None,  # for compatibility with dataset grouping logic, not used in reader initialization
+        decoder: int | None = None,  # for compatibility with dataset grouping logic, not used in reader initialization
     ):
         """Initialize Anemoi data reader."""
+        self.encoder = encoder
+        self.decoder = decoder
         source = dataset_config if dataset_config is not None else dataset
         if source is None:
             msg = "Either dataset or dataset_config must be provided."
