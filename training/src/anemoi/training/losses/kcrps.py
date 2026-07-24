@@ -186,7 +186,7 @@ class CRPS(BaseLoss):
 
         crps = einops.rearrange(crps, "bs t v latlon -> bs t 1 latlon v")
         crps = self.scale(crps, scaler_indices, without_scalers=without_scalers, grid_shard_slice=grid_shard_slice)
-
+        print("KCRPS contribution", self.reduce(crps, squash=squash, squash_mode=squash_mode, group=group if is_sharded else None))
         return self.reduce(crps, squash=squash, squash_mode=squash_mode, group=group if is_sharded else None)
 
     @property

@@ -142,7 +142,7 @@ class SpectralLoss(BaseLoss):
             raise ValueError(msg)
         print("subgrid", subgrid)
         self.subgrid = graph_data["data"].cutout_mask.flatten()
-        #slice(*(subgrid or (0, None)))
+        # slice(*(subgrid or (0, None)))
         self.projection_provider = ProjectionGraphProvider.from_config(
             projection_config,
             graph_data=graph_data,
@@ -644,6 +644,7 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
             without_scalers=_ensure_without_scalers_has_grid_dimension(without_scalers),
             grid_shard_slice=None if is_sharded else grid_shard_slice,
         )
+        print("Spectral loss contribution", self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode))
         return self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode)
 
     @property

@@ -175,7 +175,8 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         self.task = task
 
         assert isinstance(graph_data, HeteroData) or isinstance(
-            graph_data, PathLike,
+            graph_data,
+            PathLike,
         ), "graph_data must be a HeteroData object or a path to .pt files"
         assert isinstance(data_indices, dict), "data_indices must be a dict keyed by dataset name"
         if isinstance(graph_data, PathLike):

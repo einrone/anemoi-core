@@ -36,7 +36,6 @@ from anemoi.models.distributed.khop_edges import sort_edge_index_by_dst
 from anemoi.models.distributed.shapes import ShardSizes
 from anemoi.models.layers.graph import TrainableTensor
 
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -757,6 +756,7 @@ class ProjectionGraphProvider(BaseGraphProvider):
             src_node_weight_attribute=config.get("src_node_weight_attribute"),
             row_normalize=bool(config.get("row_normalize", False)),
         )
+
 
 class _GraphFileDataset(Dataset):
     """Lazily loads graph files from a directory.

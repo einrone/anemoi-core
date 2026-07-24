@@ -6,7 +6,6 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
 
-
 class ProcessConfigs:
     SENTINEL = object()
     TEMPORARY = defaultdict(dict)

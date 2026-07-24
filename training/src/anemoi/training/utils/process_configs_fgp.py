@@ -6,7 +6,6 @@ from omegaconf import DictConfig
 from omegaconf import OmegaConf
 
 
-
 class ProcessConfigs:
     SENTINEL = object()
     TEMPORARY = defaultdict(dict)
@@ -199,7 +198,8 @@ class ProcessConfigs:
             for phase in ["training", "validation"]:
                 for region, args in self.regional.items():
                     self.TEMPORARY[phase][region]["dataset_config"] = self._findcutoutnulls(
-                        deepcopy(self.struct), replacement=args,
+                        deepcopy(self.struct),
+                        replacement=args,
                     )
 
                     # print(self.TEMPORARY[phase][region])

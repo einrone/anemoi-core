@@ -457,8 +457,8 @@ class Migrator:
             return None
         return self._grouped_migrations[group + 1][0].metadata.versions["anemoi-models"]
 
-    def _check_executed_migrations(self, ckpt: CkptType, migrations: list[Migration]) -> bool:
-        """Checks whether the checkpoint has run a migration that had its script changed.
+    def _check_registered_script_changed(self, ckpt: CkptType, migrations: list[Migration]) -> bool:
+        """Checks whether the checkpoint has run a migration that was changed.
         We use the signature stored in the history to detect it.
 
         Parameters
@@ -489,13 +489,11 @@ class Migrator:
                 has_run_modified_migrations = True
         return has_run_modified_migrations
 
-    def _resolve_operations(
+    def _resolve_migrations(
         self, ckpt: CkptType, migrations: list[Migration]
-    ) -> tuple[list[Callable[[MigrationContext], None]], list[BaseOp]]:
+    ) -> tuple[list[Callable[[MigrationContext], None]], list[MigrationOp], list[str]]:
         """Resolves the list of operations to execute to migrate the checkpoint.
-        If it contains migrations and rollbacks, first rollbacked are applied (starting
-        from the end), then migrations are applied (starting from the beginning).
-
+        If it contains extra migrations, fail, otherwise migrations are applied (starting from the beginning).
         The migrations in the checkpoint are compared with the ones in the ``migrations`` argument.
 
         For example for the migrations...
