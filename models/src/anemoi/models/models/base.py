@@ -10,10 +10,10 @@
 
 import logging
 from abc import abstractmethod
+from pathlib import PosixPath
 from typing import Optional
 
 import torch
-from pathlib import PosixPath
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from omegaconf import ListConfig
@@ -66,7 +66,7 @@ class BaseGraphModel(nn.Module):
         super().__init__()
         self._graph_data = graph_data
         print("Graph data type:", type(self._graph_data))
-        if isinstance(self._graph_data, PosixPath): 
+        if isinstance(self._graph_data, PosixPath):
             self._graph_data_dict = _GraphFileDataset(self._graph_data)
         print("Graph data dict type:", type(self._graph_data_dict))
         self.data_indices = data_indices
@@ -85,10 +85,10 @@ class BaseGraphModel(nn.Module):
             data=self.dataset_names,
             hidden=self._graph_name_hidden,
         )
-        if isinstance(self._graph_data, PosixPath): 
+        if isinstance(self._graph_data, PosixPath):
             self._graph_data_dict = _GraphFileDataset(self._graph_data)
             self.node_attributes = NamedNodesAttributes(trainable_parameters, self._build_named_node_attributes_graph())
-        else: 
+        else:
             self.node_attributes = NamedNodesAttributes(trainable_parameters, self._build_named_node_attributes_graph())
 
         self._calculate_shapes_and_indices(data_indices)
@@ -108,7 +108,7 @@ class BaseGraphModel(nn.Module):
         # Instantiation of model output bounding functions (e.g., to ensure outputs like TP are positive definite)
         # Multi-dataset: create ModuleDict with ModuleList per dataset
         self.boundings = build_boundings(model_config, self.data_indices, self.statistics)
-    
+
     def _build_dataset_routing(self, model_config: DotDict) -> None:
         """Builds the dataset routing for encoders and decoders."""
         self.dataset2encoder: dict[str, str] = {}
@@ -279,7 +279,7 @@ class BaseGraphModel(nn.Module):
 
     def _build_residual(self, residual_config: DotDict) -> None:
         self.residual = torch.nn.ModuleDict()
-        if isinstance(self._graph_data, PosixPath): 
+        if isinstance(self._graph_data, PosixPath):
             self._graph_data_dict = _GraphFileDataset(self._graph_data)
         else:
             self._graph_data_dict = self._graph_data
@@ -299,17 +299,21 @@ class BaseGraphModel(nn.Module):
     def _build_named_node_attributes_graph(self) -> HeteroData:
         node_attributes_graph = HeteroData()
         for dataset_name in self.dataset_names:
-            # I think my graphs have an old definition where the dataset name is not the same 
+            # I think my graphs have an old definition where the dataset name is not the same
             node_attributes_graph[dataset_name].x = self._graph_data_dict[dataset_name]["data"].x
             node_attributes_graph[dataset_name].num_nodes = len(self._graph_data_dict[dataset_name]["data"].x)
-            node_attributes_graph[self._graph_name_hidden].x = self._graph_data_dict[dataset_name][self._graph_name_hidden].x
-            node_attributes_graph[self._graph_name_hidden].num_nodes = len(self._graph_data_dict[dataset_name][self._graph_name_hidden].x)
+            node_attributes_graph[self._graph_name_hidden].x = self._graph_data_dict[dataset_name][
+                self._graph_name_hidden
+            ].x
+            node_attributes_graph[self._graph_name_hidden].num_nodes = len(
+                self._graph_data_dict[dataset_name][self._graph_name_hidden].x
+            )
 
         # It seems that the processor is assumed to be common for multi-dataset graphs
-        # Is the encoder/decoder only provided in the .pt files usually? 
+        # Is the encoder/decoder only provided in the .pt files usually?
         # YES: subgraphs per dataset are provided in the .pt files
-        # Is multi-dataset assuming one graph for all datasets? 
-        # Revisit aurtomatic graph generation and check 
+        # Is multi-dataset assuming one graph for all datasets?
+        # Revisit aurtomatic graph generation and check
         # for hidden_name in self._as_hidden_node_names(self._graph_name_hidden):
         #     node_attributes_graph[hidden_name]["data"].x = self._graph_data_dict[hidden_name].x
         #     node_attributes_graph[hidden_name]["data"].num_nodes = self._graph_data_dict[hidden_name].num_nodes

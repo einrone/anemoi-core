@@ -105,25 +105,24 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
                     key = key.replace("_0", ".0")
             key_ckpt = key.replace("multi-domain.", "")
             state_dict[key] = state_dict.pop(key_ckpt)
-            print(f"replacing {key_ckpt} with {key}" )
+            print(f"replacing {key_ckpt} with {key}")
         if "multi-domain.mlp" in key:
             key_ckpt = key.replace("multi-domain.", "")
             state_dict[key] = state_dict.pop(key_ckpt)
-            print(f"replacing {key_ckpt} with {key}" )
-
+            print(f"replacing {key_ckpt} with {key}")
 
     for key in state_dict.copy():
         if "blocks.0" in key:
             key_ckpt = key.replace("blocks.0.", "")
             state_dict[key_ckpt] = state_dict.pop(key)
-            print(f"replacing {key} with {key_ckpt}" )
+            print(f"replacing {key} with {key_ckpt}")
         if "blocks.1" in key:
             number = int(key[27])
             print(number)
-            new_number = str(8+number)
+            new_number = str(8 + number)
             print(new_number)
             key_ckpt = key.replace(key[27] + ".blocks.1", new_number)
-            print(f"replacing {key} with {key_ckpt}" )
+            print(f"replacing {key} with {key_ckpt}")
             state_dict[key_ckpt] = state_dict.pop(key)
         if key in model_state_dict and state_dict[key].shape != model_state_dict[key].shape:
             LOGGER.info("Skipping loading parameter: %s", key)

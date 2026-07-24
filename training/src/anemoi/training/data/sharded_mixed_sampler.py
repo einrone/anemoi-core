@@ -7,10 +7,10 @@
 # granted to it by virtue of its status as an intergovernmental organisation
 # nor does it submit to any jurisdiction.
 
+import itertools
 import logging
 import os
 import random
-import itertools
 
 import numpy as np
 import torch
@@ -18,8 +18,7 @@ import torch
 from anemoi.models.distributed.balanced_partition import get_balanced_partition_range
 from anemoi.models.distributed.balanced_partition import get_partition_range
 from anemoi.training.data.data_reader import BaseAnemoiReader
-from anemoi.training.data.usable_indices import compute_union_valid_data_indices, compute_intersection_valid_data_indices
-from anemoi.training.data.usable_indices import get_usable_indices
+from anemoi.training.data.usable_indices import compute_intersection_valid_data_indices
 from anemoi.training.utils.seeding import get_base_seed
 from anemoi.training.utils.time_indices import TimeIndices
 from anemoi.training.utils.time_indices import normalize_time_indices
@@ -41,9 +40,9 @@ class MixedSampler:
         label: str = "mixed",
         shard_shapes: dict[str, list[int]] | None = None,
     ) -> None:
-        """A dataset that combines multiple data_readers together. 
+        """A dataset that combines multiple data_readers together.
         Datasets are shuffled within each encoder.
-        Sharding is done by grouping combinations of datasets, such that across GPUs the samples are the same. 
+        Sharding is done by grouping combinations of datasets, such that across GPUs the samples are the same.
 
         Args:
             data_readers (dict[str, BaseAnemoiReader]):
@@ -57,27 +56,37 @@ class MixedSampler:
         Return:
             None
         """
-        self.data_readers = data_readers 
-        # Will look like: 
-        #{"dataset_a": {"encoder": 0, "dataset": mock_dataset_a}, 
-        #"dataset_b": {"encoder": 1, "dataset": mock_dataset_b},
+        self.data_readers = data_readers
+        # Will look like:
+        # {"dataset_a": {"encoder": 0, "dataset": mock_dataset_a},
+        # "dataset_b": {"encoder": 1, "dataset": mock_dataset_b},
         # "dataset_c": {"encoder": 1, "dataset": mock_dataset_c}}
 
-        self.dataset_labels = list(data_readers.keys()) # ["dataset_a", "dataset_b", "dataset_c"]
-        encoder_labels = set(data_readers[dataset_label]["dataset"].get('encoder') for dataset_label in self.dataset_labels) # {0, 1}
+        self.dataset_labels = list(data_readers.keys())  # ["dataset_a", "dataset_b", "dataset_c"]
+        encoder_labels = set(
+            data_readers[dataset_label]["dataset"].get("encoder") for dataset_label in self.dataset_labels
+        )  # {0, 1}
         datasets_per_encoder = {encoder_label: [] for encoder_label in encoder_labels}
         for encoder_label in encoder_labels:
-            datasets_per_encoder[encoder_label] = [dataset_label for dataset_label in self.dataset_labels if data_readers[dataset_label]["dataset"].get('encoder') == encoder_label]
-        # Datasets per encoder will look like: {0: [dataset0], 1: [dataset1, dataset2]} 
-        groups = list(itertools.product(*datasets_per_encoder.values())) # [('dataset_a', 'dataset_b'), ('dataset_a', 'dataset_c')]
-        self.groups_dict = {"group_" + str(i): group for i, group in enumerate(groups)} # {"group_0": ('dataset_a', 'dataset_b'), "group_1": ('dataset_a', 'dataset_c')}
+            datasets_per_encoder[encoder_label] = [
+                dataset_label
+                for dataset_label in self.dataset_labels
+                if data_readers[dataset_label]["dataset"].get("encoder") == encoder_label
+            ]
+        # Datasets per encoder will look like: {0: [dataset0], 1: [dataset1, dataset2]}
+        groups = list(
+            itertools.product(*datasets_per_encoder.values()),
+        )  # [('dataset_a', 'dataset_b'), ('dataset_a', 'dataset_c')]
+        self.groups_dict = {
+            "group_" + str(i): group for i, group in enumerate(groups)
+        }  # {"group_0": ('dataset_a', 'dataset_b'), "group_1": ('dataset_a', 'dataset_c')}
         LOGGER.info("Groups dict: %s", self.groups_dict)
         self.valid_date_indices = {
-                group: compute_intersection_valid_data_indices(
-                    {dataset_label: data_readers[dataset_label]["dataset"] for dataset_label in datasets_in_group},
-                    relative_date_indices,
-                )
-                for group, datasets_in_group in self.groups_dict.items()
+            group: compute_intersection_valid_data_indices(
+                {dataset_label: data_readers[dataset_label]["dataset"] for dataset_label in datasets_in_group},
+                relative_date_indices,
+            )
+            for group, datasets_in_group in self.groups_dict.items()
         }
         self.group_labels = list(self.groups_dict.keys())
         self.shuffle = shuffle

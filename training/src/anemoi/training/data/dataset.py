@@ -412,18 +412,18 @@ class NativeGridDataset(IterableDataset, ABC):
 
         for i in shuffled_chunk_indices:
             LOGGER.debug(
-            (
-                "Worker pid %d yielding sample for index %s, worker id %d, global_rank %d, "
-                "model comm group %d, group_rank %d, seed comm group id %d"
-            ),
-            os.getpid(),
-            i,
-            self.worker_id,
-            self.global_rank,
-            self.model_comm_group_id,
-            self.model_comm_group_rank,
-            self.sample_comm_group_id,
-        )
+                (
+                    "Worker pid %d yielding sample for index %s, worker id %d, global_rank %d, "
+                    "model comm group %d, group_rank %d, seed comm group id %d"
+                ),
+                os.getpid(),
+                i,
+                self.worker_id,
+                self.global_rank,
+                self.model_comm_group_id,
+                self.model_comm_group_rank,
+                self.sample_comm_group_id,
+            )
             yield self.get_sample(i)
 
     def __repr__(self) -> str:

@@ -83,9 +83,9 @@ data:
     - "tcc"
 
 system:
-  output: 
+  output:
     root: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/output/
-    logs: 
+    logs:
       root: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/output/logs/
   input:
     graph: /leonardo_work/DestE_340_26/users/sbuurman/graphs/hectometric/graphs_7_10_new
@@ -119,17 +119,17 @@ dataloader:
   hectometric_dataset_validation: /leonardo_work/DestE_340_26/users/sbuurman/temp/anemoi-core/test_hectometric/hectometric_mini.txt
   hectometric_dataset_base_path: /leonardo_work/DestE_340_26/users/mvangind/hecto_decumulation/hecto_decumulated/
   training:
-    datasets: 
+    datasets:
       data:
-        dataset_config: 
+        dataset_config:
           frequency: 6h
           dataset:
             cutout:
               - dataset: null
                 rescale: {
-                  "tcc": {"scale": 0.01, "offset": 0}, 
-                  "hcc": {"scale": 0.01, "offset": 0}, 
-                  "mcc": {"scale": 0.01, "offset": 0}, 
+                  "tcc": {"scale": 0.01, "offset": 0},
+                  "hcc": {"scale": 0.01, "offset": 0},
+                  "mcc": {"scale": 0.01, "offset": 0},
                   "lcc": {"scale": 0.01, "offset": 0},
                   "tp": {"scale": 0.001, "offset": 0}
                   }
@@ -150,19 +150,19 @@ dataloader:
                   # select: [lcc, mcc, hcc, tcc]
               adjust: ["start", "end"]
               reorder: sort
-  validation: 
-    datasets: 
+  validation:
+    datasets:
       de330_2025082800_2025083000_1h_AROME_500m_storm1_v3:
         encoder: 0
         decoder: 0
-        dataset_config: 
+        dataset_config:
           dataset:
             cutout:
               - dataset: /leonardo_work/DestE_340_26/users/mvangind/hecto_decumulation/hecto_decumulated/de330_2025082800_2025083000_1h_AROME_500m_storm1_v3.zarr
                 rescale: {
-                  "tcc": {"scale": 0.01, "offset": 0}, 
-                  "hcc": {"scale": 0.01, "offset": 0}, 
-                  "mcc": {"scale": 0.01, "offset": 0}, 
+                  "tcc": {"scale": 0.01, "offset": 0},
+                  "hcc": {"scale": 0.01, "offset": 0},
+                  "mcc": {"scale": 0.01, "offset": 0},
                   "lcc": {"scale": 0.01, "offset": 0},
                   "tp": {"scale": 0.001, "offset": 0}
                   }
@@ -185,7 +185,7 @@ dataloader:
               reorder: sort
         start: 2025-08-28
         end: 2025-08-30
-  test: 
+  test:
     datasets: ${dataloader.validation}
 
   read_group_size: 1 #${system.hardware.num_gpus_per_model}
@@ -232,10 +232,10 @@ model:
 
 training:
   # No transfer learning for now, just train from scratch
-  run_id: 
+  run_id:
   #84de27676b254ef39f15210dec79551a
   #467ff6a23a454a338838b3246b520d11
-  fork_run_id: 
+  fork_run_id:
   #51e225bccd9143f9bf12ed251a8f00ed
   #51e225bccd9143f9bf12ed251a8f00ed
   # 4e0cfed768bc445c9d88a3d450e24ec6
@@ -249,7 +249,7 @@ training:
     rate: 1e-5
     min: 3e-7 #3e-7
     warmup: 10
-  per_domain_weight_frac_of_total: 0.60 # Try 60 percent # Try dropout 
+  per_domain_weight_frac_of_total: 0.60 # Try 60 percent # Try dropout
   ensemble_size_per_device: 1
   scalers:
     general_variable:
@@ -278,7 +278,7 @@ training:
       data:
         _target_: anemoi.training.losses.CombinedLoss
         losses:
-          - _target_: anemoi.training.losses.CRPS 
+          - _target_: anemoi.training.losses.CRPS
             alpha: 0.95
             scalers: ['pressure_level', 'general_variable', 'nan_mask_weights', 'node_weights']
           - _target_: anemoi.training.losses.SpectralCRPSLoss
@@ -289,4 +289,4 @@ training:
             y_dim: 1489
             scalers: ['pressure_level', 'general_variable', 'nan_mask_weights']
         scalers: ['*']
-        loss_weights: [1.0, 1.0]
+        loss_weights: [1.0, 0.00000001]

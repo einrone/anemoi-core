@@ -25,10 +25,10 @@ model:
 
 system:
   datasets:
-    MEPS: 
+    MEPS:
       encoder: 0
       decoder: 0
-      dataset: 
+      dataset:
         cutout:
           - dataset: ${hardware.paths.data}/MEPS/aifs-meps-2.5km-2020-2025-6h-v7.zarr
             trim_edge: 50
@@ -40,7 +40,7 @@ system:
     AA:
       encoder: 0 # 0 for multi-domain, null to not encode this dataset
       decoder: 0 # 0 for multi-domain, null to not decode this dataset
-      dataset: 
+      dataset:
         cutout:
           - dataset: ${hardware.paths.data}/AROME-ARCTIC/arome_arctic-2.5km-2022-2025-6h-v4.zarr
             trim_edge: 50
@@ -50,7 +50,7 @@ system:
         reorder: sort
         statistics: ${statistics}
 
-global: 
+global:
   concat:
     - join:
         - concat:
@@ -71,7 +71,7 @@ global:
       drop: [al, cp, latitude, longitude, q_250, q_50, q_600, sdor, slor, sr, stl1, swvl1, t_250, t_50, t_600, tcw, u_250, u_50, u_600, v_250, v_50, v_600, w_250, w_50, w_600, z_250, z_50, z_600]
       reorder: sort
 
-statistics: 
+statistics:
   join:
     - dataset: /leonardo_work/DestE_330_25/anemoi/datasets/ERA5/aifs-ea-an-oper-0001-mars-n320-1979-2022-6h-v6.zarr
       drop: [cp, slor, sdor, tcw, q_50, q_250, q_600, t_50, t_250, t_600, u_50, u_250, u_600, v_50, v_250, v_600, w_50, w_250, w_600, z_50, z_250, z_600]
@@ -81,15 +81,15 @@ statistics:
   adjust: ["start", "end"]
   reorder: sort
 
-dataloader: 
+dataloader:
   training:
     MEPS:
       dataset_config: ${system.datasets.MEPS.dataset}
       start: 2020-02-05
-      end: 2024-09-20 
+      end: 2024-09-20
     AA:
       dataset_config: ${system.datasets.AA.dataset}
-      start: 2022-02-01 
+      start: 2022-02-01
       end: 2024-03-07
 
   validation:
@@ -99,9 +99,9 @@ dataloader:
       end: 2025-09-21
     AA:
       dataset_config: ${system.datasets.AA.dataset}
-      start: 2024-03-08 
+      start: 2024-03-08
       end: 2025-03-08
-  
+
   test:
     MEPS:
       dataset_config: ${system.datasets.MEPS.dataset}

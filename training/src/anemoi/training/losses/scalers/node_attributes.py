@@ -1,4 +1,4 @@
-# (C) Copyright 2024 Anemoi contributors.
+# (C) Copyright 2024-2026 Anemoi contributors.
 #
 # This software is licensed under the terms of the Apache Licence Version 2.0
 # which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
@@ -94,9 +94,6 @@ class ReweightedGraphNodeAttributeScaler(GraphNodeAttributeScaler):
             norm=norm,
             **kwargs,
         )
-        print("graph", graph_data)
-        print("nodes name", nodes_name)
-        print("nodes", self.nodes)
         if self.scaling_mask_attribute_name not in self.nodes.node_attrs():
             error_msg = f"{self.__class__.__module__}.{self.__class__.__name__}: "
             error_msg += f"scaling_mask_attribute_name '{self.scaling_mask_attribute_name}' not found in graph_data - "

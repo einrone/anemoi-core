@@ -14,9 +14,9 @@ import logging
 from abc import ABC
 from abc import abstractmethod
 from functools import cached_property
+from os import PathLike
 from typing import TYPE_CHECKING
 from typing import Any
-from os import PathLike
 
 import pytorch_lightning as pl
 import torch
@@ -174,7 +174,9 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         super().__init__()
         self.task = task
 
-        assert isinstance(graph_data, HeteroData) or isinstance(graph_data, PathLike), "graph_data must be a HeteroData object or a path to .pt files"
+        assert isinstance(graph_data, HeteroData) or isinstance(
+            graph_data, PathLike,
+        ), "graph_data must be a HeteroData object or a path to .pt files"
         assert isinstance(data_indices, dict), "data_indices must be a dict keyed by dataset name"
         if isinstance(graph_data, PathLike):
             self._graph_data_dict = _GraphFileDataset(graph_data)
@@ -185,8 +187,9 @@ class BaseTrainingModule(pl.LightningModule, ABC):
 
         # Create output_mask dictionary for each dataset
         self.output_mask = {
-            name: instantiate(config.model.output_mask, nodes=self._graph_data_dict[name]) for name in self.dataset_names
-        } #VERY INEFFICIENT, can we get all these attributes once instead of looping every time?
+            name: instantiate(config.model.output_mask, nodes=self._graph_data_dict[name])
+            for name in self.dataset_names
+        }  # VERY INEFFICIENT, can we get all these attributes once instead of looping every time?
 
         # Handle supporting_arrays merge with all output masks
         combined_supporting_arrays = supporting_arrays.copy()
@@ -310,7 +313,9 @@ class BaseTrainingModule(pl.LightningModule, ABC):
 
         self.shard_sizes, self.grid_sizes = {}, {}
         for dataset_name in self.dataset_names:
-            self.grid_sizes[dataset_name] = self._graph_data_dict[dataset_name].num_nodes  # TODO(Mario): Replace by dataset.grid_size
+            self.grid_sizes[dataset_name] = self._graph_data_dict[
+                dataset_name
+            ].num_nodes  # TODO(Mario): Replace by dataset.grid_size
             self.shard_sizes[dataset_name] = get_balanced_partition_sizes(
                 self.grid_sizes[dataset_name],
                 reader_group_size,
@@ -844,7 +849,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         self.grid_shard_slice = {}
         print("dataset", batch.keys())
 
-        for dataset_name in batch.keys():
+        for dataset_name in batch:
             if self.keep_batch_sharded and self.model_comm_group_size > 1:
                 self.grid_shard_sizes[dataset_name] = self.shard_sizes[dataset_name]
                 start, end = get_partition_range(

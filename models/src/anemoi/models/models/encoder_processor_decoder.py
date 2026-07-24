@@ -9,11 +9,11 @@
 
 
 import logging
+from pathlib import PosixPath
 from typing import Optional
 
 import einops
 import torch
-from pathlib import PosixPath
 from hydra.utils import instantiate
 from torch import Tensor
 from torch.distributed.distributed_c10d import ProcessGroup
@@ -38,15 +38,25 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         """Builds the model components."""
         # Encoder data -> hidden
         self.encoder_graph_provider = torch.nn.ModuleDict()
-        # idea: _graph_data can be a dictionary of dataset names with data paths, so that the correct dataset can be loaded 
+        # idea: _graph_data can be a dictionary of dataset names with data paths, so that the correct dataset can be loaded
         for dataset_name in self.dataset_names:
             encoder_config = model_config.model.encoders[self.dataset2encoder[dataset_name]]
             # Create graph providers
             self.encoder_graph_provider[dataset_name] = create_graph_provider(
-                graph=self._graph_data[(dataset_name, "to", self._graph_name_hidden)] if not type(self._graph_data) is PosixPath else self._graph_data,
+                graph=(
+                    self._graph_data[(dataset_name, "to", self._graph_name_hidden)]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_data
+                ),
                 edge_attributes=encoder_config.get("sub_graph_edge_attributes"),
-                src_size=self.node_attributes.num_nodes[dataset_name] if not type(self._graph_data) is PosixPath else "data",
-                dst_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
+                src_size=(
+                    self.node_attributes.num_nodes[dataset_name] if type(self._graph_data) is not PosixPath else "data"
+                ),
+                dst_size=(
+                    self.node_attributes.num_nodes[self._graph_name_hidden]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_name_hidden
+                ),
                 trainable_size=encoder_config.get("trainable_size", 0),
             )
 
@@ -57,7 +67,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
                 f"All datasets for encoder {encoder_name} must have the same input dimension"
                 f"but got {encoder_in_channels_src}"
             )
-            # TODO: allow different input dimensions? What happens with multi-domain? 
+            # TODO: allow different input dimensions? What happens with multi-domain?
 
             self.encoder[str(encoder_name)] = instantiate(
                 encoder_config.mapper,
@@ -70,10 +80,22 @@ class AnemoiModelEncProcDec(BaseGraphModel):
 
         # Processor hidden -> hidden
         self.processor_graph_provider = create_graph_provider(
-            graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)]if not type(self._graph_data) is PosixPath else self._graph_data,
+            graph=(
+                self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)]
+                if type(self._graph_data) is not PosixPath
+                else self._graph_data
+            ),
             edge_attributes=model_config.model.processor.get("sub_graph_edge_attributes"),
-            src_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
-            dst_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
+            src_size=(
+                self.node_attributes.num_nodes[self._graph_name_hidden]
+                if type(self._graph_data) is not PosixPath
+                else self._graph_name_hidden
+            ),
+            dst_size=(
+                self.node_attributes.num_nodes[self._graph_name_hidden]
+                if type(self._graph_data) is not PosixPath
+                else self._graph_name_hidden
+            ),
             trainable_size=model_config.model.processor.get("trainable_size", 0),
         )
 
@@ -95,10 +117,20 @@ class AnemoiModelEncProcDec(BaseGraphModel):
 
             decoder_config = model_config.model.decoders[self.dataset2decoder[dataset_name]]
             self.decoder_graph_provider[dataset_name] = create_graph_provider(
-                graph=self._graph_data[(self._graph_name_hidden, "to", dataset_name)]if not type(self._graph_data) is PosixPath else self._graph_data,
+                graph=(
+                    self._graph_data[(self._graph_name_hidden, "to", dataset_name)]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_data
+                ),
                 edge_attributes=decoder_config.get("sub_graph_edge_attributes"),
-                src_size=self.node_attributes.num_nodes[self._graph_name_hidden] if not type(self._graph_data) is PosixPath else self._graph_name_hidden,
-                dst_size=self.node_attributes.num_nodes[dataset_name] if not type(self._graph_data) is PosixPath else "data",
+                src_size=(
+                    self.node_attributes.num_nodes[self._graph_name_hidden]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_name_hidden
+                ),
+                dst_size=(
+                    self.node_attributes.num_nodes[dataset_name] if type(self._graph_data) is not PosixPath else "data"
+                ),
                 trainable_size=decoder_config.get("trainable_size", 0),
             )
         self.decoder = torch.nn.ModuleDict()
@@ -323,7 +355,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         x_out_dict = {}
         for dataset_name in dataset_names:
             # Compute decoder edges using updated latent representation
-            
+
             decoder_edge_attr, decoder_edge_index, dec_edge_shard_sizes = self.decoder_graph_provider[
                 dataset_name
             ].get_edges(batch_size=batch_size, model_comm_group=model_comm_group, device=x.device)

@@ -81,25 +81,25 @@ data:
     - "tcc"
 
 system:
-  output: 
+  output:
     root: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/output/
-    logs: 
+    logs:
       root: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/output/logs/
   input:
     dataset:
-      training: 
+      training:
         dataset_config: null
       validation:
         dataset_config: null
-    template: 
+    template:
       encoder: 0
       decoder: 0
       cutout:
         - dataset: null
           rescale: {
-            "tcc": {"scale": 0.01, "offset": 0}, 
-            "hcc": {"scale": 0.01, "offset": 0}, 
-            "mcc": {"scale": 0.01, "offset": 0}, 
+            "tcc": {"scale": 0.01, "offset": 0},
+            "hcc": {"scale": 0.01, "offset": 0},
+            "mcc": {"scale": 0.01, "offset": 0},
             "lcc": {"scale": 0.01, "offset": 0},
             "tp": {"scale": 0.001, "offset": 0}
             }
@@ -149,7 +149,7 @@ dataloader:
   validation:
     datasets: ${system.input.dataset.validation}
 
-  test: 
+  test:
     datasets: ${system.input.dataset.validation}
 
   read_group_size: ${system.hardware.num_gpus_per_model}
@@ -167,7 +167,7 @@ dataloader:
   # training:
   #   Hecto:
 
-  # validation: 
+  # validation:
   #   Hecto:
 
   # assume same dataset opening
@@ -180,7 +180,7 @@ dataloader:
   hectometric_dataset_validation: /leonardo_work/DestE_340_26/users/sbuurman/temp/anemoi-core/test_hectometric/hectometric_mini.txt
   # hectometric_dataset_validation: /leonardo_work/DestE_340_26/users/sbuurman/multi-domain-training/anemoi-core/test_hectometric/hectometric_mini_val.txt
   hectometric_dataset_base_path: /leonardo_work/DestE_340_26/users/mvangind/hecto_decumulation/hecto_decumulated/
-  
+
 
 model:
   dynamic_mode: True
@@ -216,7 +216,7 @@ model:
 training:
   run_id: 84de27676b254ef39f15210dec79551a
   #467ff6a23a454a338838b3246b520d11
-  fork_run_id: 
+  fork_run_id:
   # 4e0cfed768bc445c9d88a3d450e24ec6
   #1f404692ab324b3b98c9c4f86274814f #a088b36da03241d58f2dd24a462fdbba
   #51e225bccd9143f9bf12ed251a8f00ed
@@ -228,7 +228,7 @@ training:
     rate: 1e-5
     min: 3e-7 #3e-7
     warmup: 10
-  per_domain_weight_frac_of_total: 0.60 # Try 60 percent # Try dropout 
+  per_domain_weight_frac_of_total: 0.60 # Try 60 percent # Try dropout
   ensemble_size_per_device: 1
   scalers:
     general_variable:
@@ -251,7 +251,7 @@ training:
   training_loss:
     _target_: anemoi.training.losses.CombinedLoss
     losses:
-      - _target_: anemoi.training.losses.AlmostFairKernelCRPS 
+      - _target_: anemoi.training.losses.AlmostFairKernelCRPS
         alpha: 0.95
         scalers: ['pressure_level', 'general_variable', 'nan_mask_weights', 'node_weights']
       - _target_: anemoi.training.losses.AFCRPSFFTLoss

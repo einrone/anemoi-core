@@ -8,11 +8,9 @@
 # nor does it submit to any jurisdiction.
 
 
-import numpy as np
 import pytest
-from pytest_mock import MockFixture
-
 from omegaconf import OmegaConf
+from pytest_mock import MockFixture
 
 from anemoi.training.utils.process_configs import ProcessConfigs
 
@@ -24,7 +22,9 @@ class TestProcessConfigs:
     def process_configs(self, mocker: MockFixture) -> ProcessConfigs:
         """Fixture to provide a ProcessConfigs instance with mocked datasets."""
         # Mock create_dataset to return mock datasets
-        mock_base_config = OmegaConf.create("/leonardo_work/DestE_340_26/users/sbuurman/MD-PR/forked_PR/anemoi-core/training/src/anemoi/training/config/hectometric_finetuning_lowres.yaml")
+        mock_base_config = OmegaConf.create(
+            "/leonardo_work/DestE_340_26/users/sbuurman/MD-PR/forked_PR/anemoi-core/training/src/anemoi/training/config/hectometric_finetuning_lowres.yaml",
+        )
         mock_base_config.dataloader.hectometric = False
         return ProcessConfigs(base_config=mock_base_config)
 
@@ -33,7 +33,7 @@ class TestProcessConfigs:
         process_configs.process()
 
         print(process_configs.TEMPORARY)
-    
+
     def test_update(self, process_configs: ProcessConfigs) -> None:
         """Test that update logic correctly updates the configuration."""
         new_config = process_configs.update()

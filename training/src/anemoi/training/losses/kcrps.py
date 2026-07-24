@@ -1,4 +1,4 @@
-# (C) Copyright 2024 Anemoi contributors.
+# (C) Copyright 2024-2026 Anemoi contributors.
 #
 # This software is licensed under the terms of the Apache Licence Version 2.0
 # which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
@@ -17,6 +17,7 @@ from torch.distributed.distributed_c10d import ProcessGroup
 
 from anemoi.training.losses.base import BaseLoss
 from anemoi.training.losses.base import Squash_mode
+from anemoi.training.utils.enums import TensorDim
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +73,15 @@ class CRPS(BaseLoss):
             msg = f"Unknown CRPS backend {backend!r}. Expected one of: 'naive', 'stable'."
             raise ValueError(msg)
 
+    def mask_nans(self, pred: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Mask CRPS inputs while preserving each tensor's ensemble size."""
+        target_nan_mask = torch.isnan(target).any(dim=TensorDim.ENSEMBLE_DIM, keepdim=True)
+        pred_nan_mask = torch.isnan(pred).any(dim=TensorDim.ENSEMBLE_DIM, keepdim=True)
+        nan_mask = target_nan_mask | pred_nan_mask
+        target = target.masked_fill(nan_mask, 0.0)
+        pred = pred.masked_fill(nan_mask, 0.0)
+        return pred, target
+
     def _kernel_crps(
         self,
         preds: torch.Tensor,
@@ -84,12 +94,12 @@ class CRPS(BaseLoss):
         Parameters
         ----------
         preds : torch.Tensor
-            Predicted ensemble, shape (batch_size, n_out_steps, n_vars, latlon, ens_size)
+            Predicted ensemble, shape (batch_size, n_out_steps, n_vars, latlon, ens_size).
         targets : torch.Tensor
-            Ground truth, shape (batch_size, n_out_steps, n_vars, latlon)
+            Ground truth, shape (batch_size, n_out_steps, n_vars, latlon, 1).
         alpha : float
             Factor for linear combination of fair (unbiased, ensemble variance component weighted by (ens-size-1)^-1)
-            and standard CRPS (1.0 = fully fair, 0.0 = fully unfair)
+            and standard CRPS (1.0 = fully fair, 0.0 = fully unfair).
         backend : {"naive", "stable"}
             Backend used for the point-wise CRPS calculation.
 
@@ -98,6 +108,8 @@ class CRPS(BaseLoss):
         CRPS : torch.Tensor
             The point-wise kernel CRPS, shape (batch_size, n_out_steps, n_vars, latlon).
         """
+        # Remove ensemble dim for ground truth.
+        targets = targets.squeeze(-1)
         alpha = self.alpha if alpha is None else alpha
         backend = self.backend if backend is None else backend
         ens_size = preds.shape[-1]
@@ -160,20 +172,20 @@ class CRPS(BaseLoss):
     ) -> torch.Tensor:
         is_sharded = grid_shard_slice is not None
 
-        y_pred, y_target = self.mask_nans(y_pred, y_target)
+        if self.ignore_nans:
+            y_pred, y_target = self.mask_nans(y_pred, y_target)
 
         y_target = einops.rearrange(y_target, "bs t latlon v -> bs t v latlon")
         y_pred = einops.rearrange(y_pred, "bs t e latlon v -> bs t v latlon e")
 
         if self.no_autocast:
-            with torch.amp.autocast(device_type="cuda", enabled=False):
+            with torch.amp.autocast(device_type=y_pred.device.type, enabled=False):
                 crps = self._kernel_crps(y_pred, y_target)
         else:
             crps = self._kernel_crps(y_pred, y_target)
 
         crps = einops.rearrange(crps, "bs t v latlon -> bs t 1 latlon v")
         crps = self.scale(crps, scaler_indices, without_scalers=without_scalers, grid_shard_slice=grid_shard_slice)
-        print("REDUCED CRPS LOSS", self.reduce(crps, squash=squash, squash_mode=squash_mode, group=group if is_sharded else None))
 
         return self.reduce(crps, squash=squash, squash_mode=squash_mode, group=group if is_sharded else None)
 

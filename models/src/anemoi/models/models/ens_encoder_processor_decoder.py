@@ -228,10 +228,15 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
                 device=x[dataset_name].device,
                 graph_name=dataset_name,
             )
-            print(f"Encoder edge_attr shape: {encoder_edge_attr.shape}, encoder_edge_index shape: {encoder_edge_index.shape}")
-            print(f"Encoder edge_attr device: {encoder_edge_attr.device}, encoder_edge_index device: {encoder_edge_index.device}")
-            print(f"Encoder edge_attr dtype: {encoder_edge_attr.dtype}, encoder_edge_index dtype: {encoder_edge_index.dtype}")
-
+            print(
+                f"Encoder edge_attr shape: {encoder_edge_attr.shape}, encoder_edge_index shape: {encoder_edge_index.shape}"
+            )
+            print(
+                f"Encoder edge_attr device: {encoder_edge_attr.device}, encoder_edge_index device: {encoder_edge_index.device}"
+            )
+            print(
+                f"Encoder edge_attr dtype: {encoder_edge_attr.dtype}, encoder_edge_index dtype: {encoder_edge_index.dtype}"
+            )
 
             enc_shard_info = BipartiteGraphShardInfo(
                 src_nodes=shard_sizes_data_dict[dataset_name],  # None if not sharded
@@ -243,8 +248,12 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
             # Encoder for this dataset
             print("encoder", self.encoder.keys())
             print("dataset name", dataset_name)
-            print(f"Encoder for dataset {dataset_name}: x_data_latent shape: {x_data_latent.shape}, x_hidden_latent shape: {x_hidden_latent.shape}")    
-            print(f"Encoder edge_attr device: {encoder_edge_attr.device}, encoder_edge_index device: {encoder_edge_index.device}")
+            print(
+                f"Encoder for dataset {dataset_name}: x_data_latent shape: {x_data_latent.shape}, x_hidden_latent shape: {x_hidden_latent.shape}"
+            )
+            print(
+                f"Encoder edge_attr device: {encoder_edge_attr.device}, encoder_edge_index device: {encoder_edge_index.device}"
+            )
             print(f"Model comm group: {model_comm_group}")
             # Encoder for this dataset
             encoder_name = self.dataset2encoder[dataset_name]

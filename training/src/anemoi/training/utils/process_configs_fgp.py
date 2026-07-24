@@ -1,10 +1,10 @@
-from copy import deepcopy
 from collections import defaultdict
+from copy import deepcopy
 
 import hydra
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig
+from omegaconf import OmegaConf
 
-from anemoi.training.schemas.base_schema import convert_to_omegaconf
 
 
 class ProcessConfigs:
@@ -16,13 +16,14 @@ class ProcessConfigs:
         self,
         base_config: DictConfig,
     ) -> None:
-        """
-        Initialize the ProcessConfigs with the base configuration.
+        """Initialize the ProcessConfigs with the base configuration.
 
         args:
             base_config (DictConfig): The base configuration object.
             hectometric (bool): Flag indicating if hectometric processing is needed.
-        returns:
+
+        Returns
+        -------
             None
         """
         OmegaConf.resolve(base_config)
@@ -41,8 +42,7 @@ class ProcessConfigs:
         self.TEMPORARY["validation"] = {}
 
     def _findcutoutnulls(self, cutout, replacement: dict) -> dict:
-        """
-        Recursively search through the cutout structure
+        """Recursively search through the cutout structure
         to find any dicts where "dataset" and other keys
         is explicitly None, and replace that dict with
         the provided replacement dict.
@@ -50,7 +50,9 @@ class ProcessConfigs:
         args:
             cutout (dict): The cutout configuration structure.
             replacement (dict): The replacement dictionary to use.
-        returns:
+
+        Returns
+        -------
             dict: The modified cutout structure with replacements made.
         """
 
@@ -69,10 +71,7 @@ class ProcessConfigs:
 
             elif isinstance(obj, list):
                 for i, item in enumerate(obj):
-                    if (
-                        isinstance(item, dict)
-                        and item.get("dataset", self.SENTINEL) is None
-                    ):
+                    if isinstance(item, dict) and item.get("dataset", self.SENTINEL) is None:
                         # Replace the entire element if it has dataset=None
                         obj[i].update(replacement.copy())
                     else:
@@ -82,28 +81,25 @@ class ProcessConfigs:
         return cutout
 
     def _inject_date(self, struct, start, end):
-        """
-        Inject values into the config where None exists,
+        """Inject values into the config where None exists,
         based on a dictionary mapping.
         Example: {"cutout[0].dataset": "some_path"}
         """
-        assert (
-            start is not None and end is not None
-        ), "Start and end dates must be provided."
+        assert start is not None and end is not None, "Start and end dates must be provided."
         assert start <= end, "Start date must be less than or equal to end date."
 
         struct["start"] = start
         struct["end"] = end
 
         return struct
-    
+
     def process_text_file_hecto(self, name, phase):
         base_path = self.config["dataloader"]["hectometric_dataset_base_path"]
-        with open(name, "r") as f:
+        with open(name) as f:
             print("reading file from .txt")
             ls = f.readlines()
             for lines in ls:
-                filename = lines.strip('\n')
+                filename = lines.strip("\n")
                 key = filename.split(".")[0]
 
                 splitted = lines.split("_")
@@ -116,24 +112,31 @@ class ProcessConfigs:
                 if filename.endswith("v2.zarr"):
                     print("dataset v2")
                     import os
-                    directory = directory 
+
+                    directory = directory
                     print(directory)
                     # tot_filename = os.listdir(directory)[0]
-                    d_filedir = "/leonardo_work/DestE_340_26/users/mvangind/hecto_decumulation/hecto_original/" + filename
-                    d= os.listdir(d_filedir)[0]
+                    d_filedir = (
+                        "/leonardo_work/DestE_340_26/users/mvangind/hecto_decumulation/hecto_original/" + filename
+                    )
+                    d = os.listdir(d_filedir)[0]
                     print("file directory:", d_filedir)
                     print("base_path:", base_path)
                     print("d:", d)
-                    self.TEMPORARY[phase][key] = {"dataset_config": self._findcutoutnulls(
-                        deepcopy(self.struct),
-                        replacement={"dataset": base_path + d},
-                    )}
+                    self.TEMPORARY[phase][key] = {
+                        "dataset_config": self._findcutoutnulls(
+                            deepcopy(self.struct),
+                            replacement={"dataset": base_path + d},
+                        ),
+                    }
                 else:
                     print("dataset v3")
-                    self.TEMPORARY[phase][key] = {"dataset_config": self._findcutoutnulls(
-                        deepcopy(self.struct),
-                        replacement={"dataset": directory},
-                    )}
+                    self.TEMPORARY[phase][key] = {
+                        "dataset_config": self._findcutoutnulls(
+                            deepcopy(self.struct),
+                            replacement={"dataset": directory},
+                        ),
+                    }
                 self.TEMPORARY[phase][key] = self._inject_date(
                     self.TEMPORARY[phase][key],
                     start=start,
@@ -170,8 +173,7 @@ class ProcessConfigs:
 
     @property
     def process(self):
-        """
-        Process the configurations to replace
+        """Process the configurations to replace
         cutout nulls with regional datasets
         and inject dates
 
@@ -190,14 +192,14 @@ class ProcessConfigs:
                 if name.endswith(".txt"):
                     print("PROCESS TEXT FILE HECTO")
                     self.process_text_file_hecto(name, phase)
-                else: 
+                else:
                     print("PROCESS SINGLE FILE HECTO")
                     self.process_single_file_hecto(name, phase)
         else:
             for phase in ["training", "validation"]:
                 for region, args in self.regional.items():
                     self.TEMPORARY[phase][region]["dataset_config"] = self._findcutoutnulls(
-                        deepcopy(self.struct), replacement=args
+                        deepcopy(self.struct), replacement=args,
                     )
 
                     # print(self.TEMPORARY[phase][region])
@@ -208,8 +210,7 @@ class ProcessConfigs:
                     )
 
     def update(self):
-        """
-        Update the base configuration with the processed temporary structures
+        """Update the base configuration with the processed temporary structures
         containing information of each regional domain.
 
         args:
@@ -224,7 +225,11 @@ class ProcessConfigs:
         return OmegaConf.create(self.config)
 
 
-@hydra.main(version_base=None, config_path="/leonardo_work/DestE_340_26/users/sbuurman/MD-PR/forked_PR/anemoi-core/training/src/anemoi/training/config/", config_name="hectometric_finetuning_lowres.yaml")
+@hydra.main(
+    version_base=None,
+    config_path="/leonardo_work/DestE_340_26/users/sbuurman/MD-PR/forked_PR/anemoi-core/training/src/anemoi/training/config/",
+    config_name="hectometric_finetuning_lowres.yaml",
+)
 def main(config: DictConfig) -> None:
     pc = ProcessConfigs(base_config=config, hectometric=True)
     pc.process

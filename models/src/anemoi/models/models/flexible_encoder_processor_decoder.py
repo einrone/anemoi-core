@@ -34,7 +34,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         """Builds the model components."""
         # Encoder data -> hidden
         self.encoder_graph_provider = torch.nn.ModuleDict()
-        self.encoder = torch.nn.ModuleDict() # TODO: initialize beforehand from config
+        self.encoder = torch.nn.ModuleDict()  # TODO: initialize beforehand from config
         for encoder_name in self.encoder_names:
             for dataset_name in self.encoder_names[encoder_name]:
                 # Create graph providers
@@ -213,7 +213,9 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         """
         encoder_names = self.encoder_names.keys()
         decoder_names = self.decoder_names.keys()
-        dataset_names = [dataset_name for encoder_name in encoder_names for dataset_name in self.encoder_names[encoder_name]]
+        dataset_names = [
+            dataset_name for encoder_name in encoder_names for dataset_name in self.encoder_names[encoder_name]
+        ]
 
         # Extract and validate batch & ensemble sizes across datasets
         batch_size = self._get_consistent_dim(x, 0)
@@ -233,7 +235,7 @@ class AnemoiModelEncProcDec(BaseGraphModel):
         shard_shapes_data_dict = {}
 
         x_hidden_latent = self.node_attributes(self._graph_name_hidden, batch_size=batch_size)
-        
+
         shard_shapes_hidden = get_shard_shapes(x_hidden_latent, 0, model_comm_group)
 
         for encoder_name in encoder_names:
@@ -268,10 +270,10 @@ class AnemoiModelEncProcDec(BaseGraphModel):
                 keep_x_dst_sharded=True,  # always keep x_latent sharded for the processor
                 edge_shard_shapes=enc_edge_shard_shapes,
             )
-            x_data_latent_dict[dataset_name] = x_data_latent 
-            #What to do if the data latent cannot be carried over? E.g. entire diagnostic domain. 
-            #We should probably remove it or replace it with the combined dataset latents to make it dataset independent
-            #Can we assume that the dataset latents all have the same shape? 
+            x_data_latent_dict[dataset_name] = x_data_latent
+            # What to do if the data latent cannot be carried over? E.g. entire diagnostic domain.
+            # We should probably remove it or replace it with the combined dataset latents to make it dataset independent
+            # Can we assume that the dataset latents all have the same shape?
             dataset_latents[encoder_name] = x_latent
 
         # Combine all dataset latents
@@ -306,23 +308,33 @@ class AnemoiModelEncProcDec(BaseGraphModel):
                 decoder_edge_attr, decoder_edge_index, dec_edge_shard_shapes = self.decoder_graph_provider[
                     dataset_name
                 ].get_edges(batch_size=batch_size, model_comm_group=model_comm_group)
-                x_data_latent = self.node_attributes(dataset_name, batch_size=batch_size) #pray to the gods that this has the right shape
+                x_data_latent = self.node_attributes(
+                    dataset_name, batch_size=batch_size
+                )  # pray to the gods that this has the right shape
                 shard_shapes_data = get_or_apply_shard_shapes(
-                    x_data_latent, 
-                    0, 
-                    shard_shapes_dim=grid_shard_shapes[dataset_name] if grid_shard_shapes is not None and dataset_name in grid_shard_shapes else None, 
-                    model_comm_group=model_comm_group
+                    x_data_latent,
+                    0,
+                    shard_shapes_dim=(
+                        grid_shard_shapes[dataset_name]
+                        if grid_shard_shapes is not None and dataset_name in grid_shard_shapes
+                        else None
+                    ),
+                    model_comm_group=model_comm_group,
                 )
                 x_out = self.decoder[decoder_name](
                     (x_latent, x_data_latent),
                     batch_size=batch_size,
-                    shard_shapes=(shard_shapes_hidden, shard_shapes_data), #shard shapes have to be per encoder
+                    shard_shapes=(shard_shapes_hidden, shard_shapes_data),  # shard shapes have to be per encoder
                     edge_attr=decoder_edge_attr,
                     edge_index=decoder_edge_index,
                     model_comm_group=model_comm_group,
                     x_src_is_sharded=True,  # x_latent always comes sharded
-                    x_dst_is_sharded=in_out_sharded[dataset_name] if dataset_name in in_out_sharded else False,  # x_data_latent comes sharded iff in_out_sharded
-                    keep_x_dst_sharded=in_out_sharded[dataset_name] if dataset_name in in_out_sharded else False,  # keep x_out sharded iff in_out_sharded
+                    x_dst_is_sharded=(
+                        in_out_sharded[dataset_name] if dataset_name in in_out_sharded else False
+                    ),  # x_data_latent comes sharded iff in_out_sharded
+                    keep_x_dst_sharded=(
+                        in_out_sharded[dataset_name] if dataset_name in in_out_sharded else False
+                    ),  # keep x_out sharded iff in_out_sharded
                     edge_shard_shapes=dec_edge_shard_shapes,
                 )
 

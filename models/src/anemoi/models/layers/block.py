@@ -547,7 +547,7 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
         self.lin_edge = Linear(edge_dim, num_heads * self.out_channels_conv)  # , bias=False)
 
         self.lin_beta = Linear(3 * out_channels, 1, bias=False)
-        #nn.init.constant_(self.lin_beta.weight, 0.0)
+        # nn.init.constant_(self.lin_beta.weight, 0.0)
 
         self.projection = Linear(self.attn_channels, out_channels)
 
@@ -690,9 +690,9 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
         if self.graph_attention_backend == "triton":
             # Ensure contiguous memory layout for ALL tensors passed to Triton kernel
             edges = edges.contiguous()
-            
+
             csc, perm, reverse = edge_index_to_csc(edge_index, num_nodes=conv_size, reverse=True)
-            
+
             # Ensure CSC indices (column pointers and row indices) are contiguous
             csc = (csc[0].contiguous(), csc[1].contiguous())
             # Ensure reverse tuple elements are contiguous (reverse is a tuple)
@@ -700,7 +700,7 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
                 reverse = tuple(r.contiguous() if isinstance(r, Tensor) else r for r in reverse)
             else:
                 reverse = reverse.contiguous()
-            
+
             edges_csc = edges.index_select(0, perm)
             edges_csc = edges_csc.contiguous()
             args_conv = (edges_csc, csc, reverse)
@@ -1055,11 +1055,7 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         out_new_chunks = []
 
         for out_chunk, x_r_chunk in zip(out_chunks, x_r_chunks):
-            beta = torch.sigmoid(
-                self.lin_beta(
-                    torch.cat([out_chunk, x_r_chunk, out_chunk - x_r_chunk], dim=-1)
-                )
-            )
+            beta = torch.sigmoid(self.lin_beta(torch.cat([out_chunk, x_r_chunk, out_chunk - x_r_chunk], dim=-1)))
 
             out_chunk_new = beta * x_r_chunk + (1.0 - beta) * out_chunk
 
