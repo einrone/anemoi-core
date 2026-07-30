@@ -324,8 +324,10 @@ class NativeGridDataset(IterableDataset, ABC):
     def shard_shapes(self) -> dict[str, list]:
         """Return shard shapes for all data readers."""
         shard_shapes = {}
+        print("Reader group size")
         for name, dataset in self.data_readers.items():
             shard_shapes[name] = get_balanced_partition_sizes(dataset.grid_size, self.reader_group_size)
+        print("shard shapes", shard_shapes)
         return shard_shapes
 
     def get_shard_slice(self, dataset_name: str, reader_group_rank: int) -> slice:
@@ -369,6 +371,7 @@ class NativeGridDataset(IterableDataset, ABC):
             labeled_samples = [
                 (str(group), int(i.item())) for group, inds in shuffled_chunk_indices.items() for i in inds
             ]
+        print("samples", labeled_samples)
 
         return labeled_samples
 
@@ -377,15 +380,22 @@ class NativeGridDataset(IterableDataset, ABC):
         group_name, i = index
         datasets_in_group = self.groups_dict[group_name]
         x = {}
+        print("group", group_name)
+        print("index", i)
+        print("datasets in group", datasets_in_group)
         for name in datasets_in_group:
             dataset = self.data_readers[name]
+            print("dataset", name)
             time_step = offset_time_indices(int(i), self.relative_date_indices[name])
+            print("time step", i)
             if self.shard_shapes is not None and self.shard_shapes[name] is not None:
                 start, end = get_partition_range(self.shard_shapes[name], self.reader_group_rank)
                 grid_indices = slice(start, end)
             else:
                 grid_indices = slice(None)
+            print("grid indices", grid_indices)
             x[name] = dataset.get_sample(time_step, grid_indices)
+            print("sample retreived", x[name].shape)
         return x
 
     def __iter__(self) -> None:

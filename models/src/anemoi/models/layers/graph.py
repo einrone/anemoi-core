@@ -75,17 +75,21 @@ class NamedNodesAttributes(nn.Module):
         super().__init__()
 
         trainable_parameters = defaultdict(int, trainable_parameters)
+        print("graph_data", graph_data)
 
         self.define_fixed_attributes(graph_data, trainable_parameters)
 
         self.trainable_tensors = nn.ModuleDict()
         for nodes_name, nodes in graph_data.node_items():
+   
             self.register_coordinates(nodes_name, nodes.x)
             self.register_tensor(nodes_name, trainable_parameters[nodes_name])
 
     def define_fixed_attributes(self, graph_data: HeteroData, trainable_parameters: dict[str, int]) -> None:
         """Define fixed attributes."""
         nodes_names = list(graph_data.node_types)
+        print("node names", nodes_names)
+        print("graph data keys", graph_data.node_items())
         self.num_nodes = {nodes_name: graph_data[nodes_name].num_nodes for nodes_name in nodes_names}
         self.attr_ndims = {
             nodes_name: 2 * graph_data[nodes_name].x.shape[1] + trainable_parameters[nodes_name]

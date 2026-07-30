@@ -776,9 +776,10 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         """
         assert isinstance(y_pred, dict), "y_pred must be a dict keyed by dataset name"
         assert isinstance(y, dict), "y must be a dict keyed by dataset name"
+        print("ypred keys", y_pred.keys())
         # Prepare tensors for loss/metrics computation
         total_loss, metrics_next, y_preds = None, {}, {}
-        for dataset_name in self.target_dataset_names:
+        for dataset_name in y_pred.keys():
             dataset_loss, dataset_metrics, y_preds[dataset_name] = self.compute_dataset_loss_metrics(
                 y_pred[dataset_name],
                 y[dataset_name],

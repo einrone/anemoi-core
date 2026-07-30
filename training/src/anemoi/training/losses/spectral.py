@@ -633,6 +633,8 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
 
             pred_spec = einops.rearrange(pred_spec, "b t e m v -> b t v m e")  # ensemble dim last for preds
             tgt_spec = einops.rearrange(tgt_spec, "b t m v -> b t v m")
+            print("pred_spec", pred_spec.shape)
+            print("tgt_spec", tgt_spec.shape)
             crps = self._kernel_crps(pred_spec, tgt_spec, alpha=self.alpha)
 
         crps = einops.rearrange(crps, "b t v m -> b t 1 m v")  # consistent with tensordim

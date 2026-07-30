@@ -52,11 +52,11 @@ class AnemoiDatasetsDataModule(pl.LightningDataModule):
         self.dataset_names = list(self.train_dataloader_config.keys())
         LOGGER.info("Initializing multi-dataset module with datasets: %s", self.dataset_names)
 
-        # Set training end dates if not specified for each dataset
-        for name, dataset_config in self.train_dataloader_config.items():
-            if dataset_config.end is None:
-                msg = f"No end date specified for training dataset {name}."
-                raise ValueError(msg)
+        # # Set training end dates if not specified for each dataset
+        # for name, dataset_config in self.train_dataloader_config.items():
+        #     if dataset_config.end is None:
+        #         msg = f"No end date specified for training dataset {name}."
+        #         raise ValueError(msg)
 
         if not self.config.dataloader.pin_memory:
             LOGGER.info("Data loader memory pinning disabled.")

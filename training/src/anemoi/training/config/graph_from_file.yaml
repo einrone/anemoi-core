@@ -121,6 +121,8 @@ dataloader:
   training:
     datasets:
       data:
+        encoder: 0
+        decoder: 0
         dataset_config:
           frequency: 6h
           dataset:
@@ -133,6 +135,7 @@ dataloader:
                   "lcc": {"scale": 0.01, "offset": 0},
                   "tp": {"scale": 0.001, "offset": 0}
                   }
+                frequency: 6h
                 #thinning: 4
               - dataset: /leonardo_work/DestE_340_26/ai-ml/datasets/aifs-od-an-oper-0001-mars-n320-2016-2025-6h-v1-combined-land.zarr
                 drop: [100u, 100v, cp, q_250, q_50, q_600, stl1, swvl1, t_250, t_50, t_600, tcw, u_250, u_50, u_600, v_250, v_50, v_600, w_250, w_50, w_600, z_250, z_50, z_600]
@@ -149,7 +152,9 @@ dataloader:
                   select: [lcc, mcc, hcc, tcc, strd, ssrd]
                   # select: [lcc, mcc, hcc, tcc]
               adjust: ["start", "end"]
-              reorder: sort
+              reorder: sort 
+        start: null
+        end: null
   validation:
     datasets:
       de330_2025082800_2025083000_1h_AROME_500m_storm1_v3:
@@ -183,8 +188,8 @@ dataloader:
                   # select: [lcc, mcc, hcc, tcc]
               adjust: ["start", "end"]
               reorder: sort
-        start: 2025-08-28
-        end: 2025-08-30
+        start: 2025-08-04
+        end: 2025-08-06
   test:
     datasets: ${dataloader.validation}
 
@@ -287,6 +292,6 @@ training:
             subgrid: output_mask
             x_dim: 1489
             y_dim: 1489
-            scalers: ['pressure_level', 'general_variable', 'nan_mask_weights']
+            scalers: ['pressure_level', 'general_variable', 'nan_mask_weights', "node_weights"]
         scalers: ['*']
-        loss_weights: [1.0, 0.00000001]
+        loss_weights: [1.0, 1.0]

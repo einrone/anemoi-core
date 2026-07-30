@@ -116,7 +116,8 @@ class BaseGraphModel(nn.Module):
         for encoder_name, encoder_config in model_config.model.encoders.items():
             datasets_to_encode = encoder_config["datasets"]
             self.encoder2datasets[encoder_name] = datasets_to_encode
-            assert len(datasets_to_encode) == 1, "Each encoder must be associated with exactly one dataset for now."
+            # ASSERT NO LONGER NEEDED WITH MULTIDOMAIN IMPLEMENTATION
+            # assert len(datasets_to_encode) == 1, "Each encoder must be associated with exactly one dataset for now."
             for d in datasets_to_encode:
                 self.dataset2encoder[d] = str(encoder_name)
 
@@ -125,7 +126,8 @@ class BaseGraphModel(nn.Module):
         for decoder_name, decoder_config in model_config.model.decoders.items():
             datasets_to_decode = decoder_config["datasets"]
             self.decoder2datasets[decoder_name] = datasets_to_decode
-            assert len(datasets_to_decode) == 1, "Each decoder must be associated with exactly one dataset for now."
+            # ASSERT NO LONGER NEEDED WITH MULTIDOMAIN IMPLEMENTATION
+            # assert len(datasets_to_decode) == 1, "Each decoder must be associated with exactly one dataset for now."
             for d in datasets_to_decode:
                 self.dataset2decoder[d] = str(decoder_name)
 
@@ -141,11 +143,12 @@ class BaseGraphModel(nn.Module):
         self._internal_output_idx = {}
         self._decoding_forcing_input_idx = {}
         self.input_dim = {}
-        self.input_dim_latent = self._calculate_input_dim_latent()
         self.target_dim = {}
         self.output_dim = {}
+        self.input_dim_latent = {}
 
         for dataset_name, dataset_indices in data_indices.items():
+            self.input_dim_latent[dataset_name] = self._calculate_input_dim_latent(dataset_name)
             self._internal_input_idx[dataset_name] = dataset_indices.model.input.prognostic
             self._internal_output_idx[dataset_name] = dataset_indices.model.output.prognostic
             self._decoding_forcing_input_idx[dataset_name] = [
@@ -166,9 +169,9 @@ class BaseGraphModel(nn.Module):
     def _calculate_input_dim(self, dataset_name: str) -> int:
         return self.n_step_input * self.num_input_channels[dataset_name] + self.node_attributes.attr_ndims[dataset_name]
 
-    def _calculate_input_dim_latent(self) -> int:
+    def _calculate_input_dim_latent(self, dataset_name) -> int:
         """Calculate the latent input dimension."""
-        nodes_name = self._graph_name_hidden if isinstance(self._graph_name_hidden, str) else self._graph_name_hidden[0]
+        nodes_name = self._graph_name_hidden + "_" + dataset_name if isinstance(self._graph_name_hidden, str) else self._graph_name_hidden[0]
         return self.node_attributes.attr_ndims[nodes_name]
 
     @staticmethod
@@ -302,17 +305,18 @@ class BaseGraphModel(nn.Module):
             # I think my graphs have an old definition where the dataset name is not the same
             node_attributes_graph[dataset_name].x = self._graph_data_dict[dataset_name]["data"].x
             node_attributes_graph[dataset_name].num_nodes = len(self._graph_data_dict[dataset_name]["data"].x)
-            node_attributes_graph[self._graph_name_hidden].x = self._graph_data_dict[dataset_name][
+            node_attributes_graph[self._graph_name_hidden + "_" + dataset_name].x = self._graph_data_dict[dataset_name][
                 self._graph_name_hidden
             ].x
-            node_attributes_graph[self._graph_name_hidden].num_nodes = len(
+            node_attributes_graph[self._graph_name_hidden + "_" + dataset_name].num_nodes = len(
                 self._graph_data_dict[dataset_name][self._graph_name_hidden].x
             )
 
         # It seems that the processor is assumed to be common for multi-dataset graphs
         # Is the encoder/decoder only provided in the .pt files usually?
         # YES: subgraphs per dataset are provided in the .pt files
-        # Is multi-dataset assuming one graph for all datasets?
+        # Is multi-dataset assuming one graph for all datasets? YES 
+        #TODO: change to fit MD/hecto!
         # Revisit aurtomatic graph generation and check
         # for hidden_name in self._as_hidden_node_names(self._graph_name_hidden):
         #     node_attributes_graph[hidden_name]["data"].x = self._graph_data_dict[hidden_name].x

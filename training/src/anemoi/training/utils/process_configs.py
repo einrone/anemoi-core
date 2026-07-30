@@ -192,7 +192,10 @@ class ProcessConfigs:
         """
         hecto_dirs_train = self.process_text_file_hecto(self.struct_train)
         self.config = self._findcutoutkeys(self.config, "datasets", hecto_dirs_train)
-        print("Config after preprocessing", self.config["dataloader"]["training"])
+        dataset_names = list(hecto_dirs_train.keys())
+        self.config["model"]["encoders"]["multi-domain"]["datasets"] = dataset_names
+        self.config["model"]["decoders"]["multi-domain"]["datasets"] = dataset_names
+        print("Config after preprocessing", self.config["model"]["encoders"])
         return OmegaConf.create(self.config)
 
 

@@ -95,7 +95,10 @@ class BaseAnemoiReader:
         if source is None:
             msg = "Either dataset or dataset_config must be provided."
             raise ValueError(msg)
-        self.data = open_dataset(_normalize_dataset_config(source), start=start, end=end)
+        print("opening dataset", _normalize_dataset_config(source))
+        print("start", start)
+        print("end", end)
+        self.data = open_dataset(_normalize_dataset_config(source))
 
     @property
     def dates(self) -> np.ndarray:
@@ -188,7 +191,10 @@ class BaseAnemoiReader:
         grid_shard_indices: np.ndarray | slice | None = None,
     ) -> torch.Tensor:
         """Get a sample from the dataset."""
+        
+        print("data without sharding", self.data[time_indices, :, :, :])
         if isinstance(grid_shard_indices, slice):
+            print("grid shard indices", grid_shard_indices)
             # Load only shards into CPU memory
             x = self.data[time_indices, :, :, grid_shard_indices]
 
@@ -196,6 +202,8 @@ class BaseAnemoiReader:
             # Load full grid in CPU memory, select grid_shard after
             # Note that anemoi-datasets currently doesn't support slicing + indexing
             # in the same operation.
+            print("grid shard indices", len(grid_shard_indices))
+
             x = self.data[time_indices, :, :, :]
             x = x[..., grid_shard_indices]  # select the grid shard
 

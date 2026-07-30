@@ -73,37 +73,39 @@ class AnemoiModelEncProcDec(BaseGraphModel):
                 encoder_config.mapper,
                 _recursive_=False,  # Avoids instantiation of layer_kernels here
                 in_channels_src=encoder_in_channels_src[0],
-                in_channels_dst=self.input_dim_latent,
+                in_channels_dst=self.input_dim_latent[dataset_name],
                 hidden_dim=self.num_channels,
                 edge_dim=self.encoder_graph_provider[self.encoder2datasets[encoder_name][0]].edge_dim,
             )
 
         # Processor hidden -> hidden
-        self.processor_graph_provider = create_graph_provider(
-            graph=(
-                self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)]
-                if type(self._graph_data) is not PosixPath
-                else self._graph_data
-            ),
-            edge_attributes=model_config.model.processor.get("sub_graph_edge_attributes"),
-            src_size=(
-                self.node_attributes.num_nodes[self._graph_name_hidden]
-                if type(self._graph_data) is not PosixPath
-                else self._graph_name_hidden
-            ),
-            dst_size=(
-                self.node_attributes.num_nodes[self._graph_name_hidden]
-                if type(self._graph_data) is not PosixPath
-                else self._graph_name_hidden
-            ),
-            trainable_size=model_config.model.processor.get("trainable_size", 0),
-        )
+        self.processor_graph_provider = torch.nn.ModuleDict()
+        for dataset_name in self.dataset_names:
+            self.processor_graph_provider[dataset_name] = create_graph_provider(
+                graph=(
+                    self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_data
+                ),
+                edge_attributes=model_config.model.processor.get("sub_graph_edge_attributes"),
+                src_size=(
+                    self.node_attributes.num_nodes[self._graph_name_hidden]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_name_hidden
+                ),
+                dst_size=(
+                    self.node_attributes.num_nodes[self._graph_name_hidden]
+                    if type(self._graph_data) is not PosixPath
+                    else self._graph_name_hidden
+                ),
+                trainable_size=model_config.model.processor.get("trainable_size", 0),
+            )
 
         self.processor = instantiate(
             model_config.model.processor,
             _recursive_=False,  # Avoids instantiation of layer_kernels here
             num_channels=self.num_channels,
-            edge_dim=self.processor_graph_provider.edge_dim,
+            edge_dim=self.processor_graph_provider[dataset_name].edge_dim,
         )
 
         # Decoder hidden -> data
