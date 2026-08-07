@@ -95,9 +95,10 @@ class BaseAnemoiReader:
         if source is None:
             msg = "Either dataset or dataset_config must be provided."
             raise ValueError(msg)
-        print("opening dataset", _normalize_dataset_config(source))
+        LOGGER.info(f"opening dataset {_normalize_dataset_config(source)}")
         print("start", start)
         print("end", end)
+        self.source = source
         self.data = open_dataset(_normalize_dataset_config(source))
 
     @property
@@ -109,6 +110,11 @@ class BaseAnemoiReader:
     def grid_size(self) -> int:
         """Return dataset grid size."""
         return sum(self.data.grids)
+    
+    @property
+    def field_shape(self) -> list[int]:
+        """Return dataset field shape."""
+        return self.data.field_shape
 
     @property
     def statistics(self) -> dict:
@@ -192,7 +198,9 @@ class BaseAnemoiReader:
     ) -> torch.Tensor:
         """Get a sample from the dataset."""
         
-        print("data without sharding", self.data[time_indices, :, :, :])
+        LOGGER.info(f"data without sharding {self.data[time_indices, :, :, :].shape}")
+        LOGGER.info(f"opening dataset {self.source}")
+        LOGGER.info(f"Normalized {_normalize_dataset_config(self.source)}")
         if isinstance(grid_shard_indices, slice):
             print("grid shard indices", grid_shard_indices)
             # Load only shards into CPU memory

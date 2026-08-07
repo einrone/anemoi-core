@@ -72,7 +72,6 @@ def create_graph_provider(
         Appropriate graph provider instance
     """
     if graph:
-        print("graph type:", type(graph))
         if isinstance(graph, Path) and graph.is_dir():
             return FileGraphProvider(
                 graph_dir=graph,
@@ -780,7 +779,6 @@ class _GraphFileDataset(Dataset):
         self.paths: list[Path] = sorted(self.graph_dir.glob(f"*{extension}"))
         self.paths = {path.parts[-1].split(".")[0]: path for path in self.paths}
         self.names = list(self.paths.keys())
-        print("available graph names", self.names)
         if not self.paths:
             raise RuntimeError(f"No {extension} files found in {self.graph_dir}")
 
@@ -884,20 +882,11 @@ class FileGraphProvider(BaseGraphProvider):
     def _init_from_graph(self, graph: HeteroData) -> None:
         """Derive src_size, dst_size, edge_attributes, trainable_size from a graph."""
         # --- src_size / dst_size ---
-        print("graph", graph)
-        print("graph src_name", self.src_name)
-        print("graph dst_name", self.dst_name)
-        print(graph[self.src_name])
         self.src_size = graph[self.src_name].num_nodes
         self.dst_size = graph[self.dst_name].num_nodes
-
-        print(self.src_size, self.dst_size)
         assert (
             self.src_size is not None or self.dst_size is not None
         ), "Graph must have at least one of src_size or dst_size attributes"
-        print("graph edge attributes:", self.edge_attributes)
-        print(graph[self.edge_attributes[0]])
-        print(type(graph[self.edge_attributes[0]]))
         edge_attr_tensor = torch.cat(
             [graph[(self.src_name, "to", self.dst_name)][attr] for attr in self.edge_attributes], axis=1
         )
@@ -987,11 +976,6 @@ class FileGraphProvider(BaseGraphProvider):
         tuple[Tensor, Adj, Optional[ShardSizes]]
             Edge attributes, expanded edge index, and optional edge_shard_sizes.
         """
-        print(f"Loading graph name'{graph_name}' from the dataset.")
-        print(self._dataset[graph_name])
-        print(self._dataset[graph_name][self.src_name])
-        print("graph src_name", self.src_name)
-        print("graph dst_name", self.dst_name)
         full_graph = self._dataset[graph_name]
         src_size = full_graph[self.src_name].num_nodes
         dst_size = full_graph[self.dst_name].num_nodes
@@ -1011,18 +995,12 @@ class FileGraphProvider(BaseGraphProvider):
             dim=1,
         )
         if shard_edges:
-            print("src size * batch size", src_size * batch_size, "dst size * batch size", dst_size * batch_size)
-            print("edge index shape:", edge_index.shape, "edge attr shape:", edge_attr.shape)
-            print("edge_index device:", edge_index.device, "edge_attr device:", edge_attr.device)
-            print("edge_index dtype:", edge_index.dtype, "edge_attr dtype:", edge_attr.dtype)
             edge_index = edge_index.to(torch.int64)
             edge_attr = edge_attr.to(torch.float16)
             # edge_attr = edge_attr.unsqueeze(1, dim=1)
-            print("edge_index after to int64 dtype:", edge_index.dtype)
             return shard_edges_1hop(
                 edge_attr, edge_index, src_size * batch_size, dst_size * batch_size, model_comm_group
             )
-            print("edge_index dtype:", edge_index.dtype, "edge_attr dtype:", edge_attr.dtype)
         del graph
         del full_graph
         return edge_attr, edge_index, None

@@ -192,14 +192,19 @@ class SpectralLoss(BaseLoss):
             LOGGER.debug("Spectral loss: shape after projection: %s", tuple(x.shape))
         return x
 
-    def _to_spectral(self, x: torch.Tensor) -> torch.Tensor:
+    def _to_spectral(self, x: torch.Tensor, field_shape: tuple[int, int] | None = None) -> torch.Tensor:
         """Select the node subset and optionally project to the target grid, then transform to the spectral domain."""
-        return self.transform.forward(self._select_and_project(x))
+        return self.transform.forward(self._select_and_project(x), field_shape=field_shape)
 
-    def _to_spectral_flat(self, x: torch.Tensor) -> torch.Tensor:
+    def _to_spectral_flat(self, x: torch.Tensor, field_shape: tuple[int, int] | None = None) -> torch.Tensor:
         """Transform to spectral domain and flatten the transformed dims into one "mode" axis."""
-        x_spec = self._to_spectral(x)
+        x_spec = self._to_spectral(x, field_shape=field_shape)
         # the transform splits the single grid dim into two spectral dims; flatten them back to one
+        print("x_spec shape", x_spec.shape)
+        if x_spec.ndim == 5:
+            print("x_spec tgt before flatten", torch.sum(torch.abs(x_spec[0, 0, :, :, 0]), dim=(0)))
+        elif x_spec.ndim == 6:
+            print("x_spec pred before flatten", torch.sum(torch.abs(x_spec[0, 0, 0, :, :, 0]), dim=(0)))
         return x_spec.flatten(start_dim=x_spec.ndim - 3, end_dim=-2)
 
     def _prepare_for_spectral_transform(
@@ -610,9 +615,10 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
         grid_shard_sizes: ShardSizes = None,
         grid_dim: int | None = None,
         squash_mode: Squash_mode = "avg",
+        field_shape: tuple[int, int] | None = None,
     ) -> torch.Tensor:
-        print("prediction shape", pred.shape)
-        print("target shape", target.shape)
+        print("field_shape", field_shape)
+        self.x_dim, self.y_dim = field_shape if field_shape is not None else (self.x_dim, self.y_dim)
         grid_dim = TensorDim.GRID if grid_dim is None else grid_dim
         pred, target, channel_shard_sizes = self._prepare_for_spectral_transform(
             pred,
@@ -628,13 +634,19 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
         context = torch.amp.autocast(device_type=pred.device.type, enabled=False) if self.no_autocast else nullcontext()
         with context:
             # -> [..., modes, vars]
-            pred_spec = self._to_spectral_flat(pred)
-            tgt_spec = self._to_spectral_flat(target)
+            pred_spec = self._to_spectral_flat(pred, field_shape=field_shape)
+            tgt_spec = self._to_spectral_flat(target, field_shape=field_shape)
 
             pred_spec = einops.rearrange(pred_spec, "b t e m v -> b t v m e")  # ensemble dim last for preds
             tgt_spec = einops.rearrange(tgt_spec, "b t m v -> b t v m")
             print("pred_spec", pred_spec.shape)
-            print("tgt_spec", tgt_spec.shape)
+            # print("pred_spec before normalization", torch.mean(torch.abs(pred_spec[0,0,0,0,:])))
+            # print("tgt_spec before normalization", tgt_spec.mean(dim=(3)))
+            # pred_spec = pred_spec / mean
+            # tgt_spec = tgt_spec / mean
+            # print("pred_spec", pred_spec.shape)
+            # print("tgt_spec", tgt_spec.shape)
+            # print("pred_spec after normalization", pred_spec)
             crps = self._kernel_crps(pred_spec, tgt_spec, alpha=self.alpha)
 
         crps = einops.rearrange(crps, "b t v m -> b t 1 m v")  # consistent with tensordim
@@ -646,8 +658,10 @@ class SpectralCRPSLoss(SpectralLoss, CRPS):
             without_scalers=_ensure_without_scalers_has_grid_dimension(without_scalers),
             grid_shard_slice=None if is_sharded else grid_shard_slice,
         )
-        print("Spectral loss contribution", self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode))
-        return self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode)
+        print("self.x_dim", self.x_dim)
+        print("self.y_dim", self.y_dim)
+        print("Spectral loss contribution", (self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode)))
+        return (self.reduce(scaled, squash=squash, group=group, squash_mode=squash_mode))
 
     @property
     def name(self) -> str:

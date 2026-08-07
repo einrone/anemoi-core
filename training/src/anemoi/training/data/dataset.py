@@ -34,7 +34,7 @@ from anemoi.training.utils.time_indices import offset_time_indices
 LOGGER = logging.getLogger(__name__)
 
 
-class NativeGridDataset(IterableDataset, ABC):
+class AnemoiDataset(IterableDataset, ABC):
     """Base Anemoi Datasets torch dataset class."""
 
     def __init__(
@@ -83,7 +83,6 @@ class NativeGridDataset(IterableDataset, ABC):
                 for dataset_label in self.dataset_labels
                 if self.data_readers[dataset_label].encoder == encoder_label
             ]
-
         # Create groups of datasets that will be sampled together
         groups = list(itertools.product(*datasets_per_encoder.values()))
         self.groups_dict = {"group_" + str(i): group for i, group in enumerate(groups)}
@@ -230,6 +229,7 @@ class NativeGridDataset(IterableDataset, ABC):
             self.sample_comm_group_id,
             self.sample_comm_num_groups,
         )
+        
 
     def set_ens_comm_group_info(
         self,
@@ -267,7 +267,11 @@ class NativeGridDataset(IterableDataset, ABC):
             self.sample_comm_group_id,
             self.sample_comm_num_groups,
         )
-
+    @property
+    def field_shapes(self) -> dict[str, list[int]]:
+        """Return field shapes for all data readers."""
+        return self._collect("field_shape")
+        
     def per_worker_init(self, n_workers: int, worker_id: int) -> None:
         """Initialize a specific worker, based on the valid date indices.
 
@@ -319,13 +323,17 @@ class NativeGridDataset(IterableDataset, ABC):
                 base_seed,
                 sanity_rnd,
             )
+        sample = next(self.__iter__())
+        # LOGGER.info(f"TEST SAMPLE: {sample.keys()}, {sample[list(sample.keys())[0]].shape}")
 
     @cached_property
     def shard_shapes(self) -> dict[str, list]:
         """Return shard shapes for all data readers."""
         shard_shapes = {}
-        print("Reader group size")
+        print("Reader group size", self.reader_group_size)
         for name, dataset in self.data_readers.items():
+            print("dataset name", name)
+            print("grid size", dataset.grid_size)
             shard_shapes[name] = get_balanced_partition_sizes(dataset.grid_size, self.reader_group_size)
         print("shard shapes", shard_shapes)
         return shard_shapes
@@ -345,6 +353,7 @@ class NativeGridDataset(IterableDataset, ABC):
         -------
             list[tuple[str, int]]: A list of tuples containing the domain name and index for each shuffled chunk.
         """
+        print("shard shapes", self.shard_shapes)
         if self.shuffle:
             shuffled_chunk_indices = {
                 group: self.rng.choice(
@@ -354,16 +363,19 @@ class NativeGridDataset(IterableDataset, ABC):
                 )[self.chunk_index_range[group]]
                 for group, indices in self.valid_date_indices.items()
             }
+            print("shuffled_chunk_indices", shuffled_chunk_indices)
 
             labeled_samples_and_indexes = [
                 (group, i) for group, indices in shuffled_chunk_indices.items() for i in indices
             ]
+            print("labeled_samples_and_indexes", labeled_samples_and_indexes)
 
             labeled_samples = self.rng.choice(
                 labeled_samples_and_indexes,
                 size=len(labeled_samples_and_indexes),
                 replace=False,
             )
+            print("labeled_samples ", labeled_samples)
         else:
             shuffled_chunk_indices = {
                 group: indices[self.chunk_index_range[group]] for group, indices in self.valid_date_indices.items()
@@ -376,13 +388,14 @@ class NativeGridDataset(IterableDataset, ABC):
         return labeled_samples
 
     def get_sample(self, index: tuple[str, int]) -> torch.Tensor:
-        LOGGER.debug("Getting sample for index %s", index)
+        LOGGER.info("Getting sample for index %s", index)
         group_name, i = index
         datasets_in_group = self.groups_dict[group_name]
         x = {}
-        print("group", group_name)
+        LOGGER.info(f"group {group_name}")
         print("index", i)
         print("datasets in group", datasets_in_group)
+        print("ALL GROUPS", self.groups_dict)
         for name in datasets_in_group:
             dataset = self.data_readers[name]
             print("dataset", name)
@@ -394,8 +407,11 @@ class NativeGridDataset(IterableDataset, ABC):
             else:
                 grid_indices = slice(None)
             print("grid indices", grid_indices)
+            grid_indices = slice(None)
             x[name] = dataset.get_sample(time_step, grid_indices)
-            print("sample retreived", x[name].shape)
+        print('dataset names', x.keys())
+        print("dataset shapes", [val.shape for val in x.values()])
+        LOGGER.info(f"dataset name {x.keys()} dataset shape {x[list(x.keys())[0]].shape}")
         return x
 
     def __iter__(self) -> None:
@@ -419,6 +435,7 @@ class NativeGridDataset(IterableDataset, ABC):
             self.model_comm_group_rank,
             self.sample_comm_group_id,
         )
+        LOGGER.info(f"shuffled_chunk_indices {shuffled_chunk_indices}")
 
         for i in shuffled_chunk_indices:
             LOGGER.debug(

@@ -706,12 +706,6 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
             args_conv = (edges_csc, csc, reverse)
         else:
             args_conv = (edges, edge_index, conv_size)
-            print("edges shape:", edges.shape)
-            print("edge_index shape:", edge_index.shape)
-            print("conv_size:", conv_size)
-        print("query shape:", query.shape)
-        print("key shape:", key.shape)
-        print("value shape:", value.shape)
         return self.conv(query, key, value, *args_conv)
 
     def attention_block(

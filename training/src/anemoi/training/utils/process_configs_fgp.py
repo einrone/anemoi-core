@@ -234,10 +234,6 @@ def main(config: DictConfig) -> None:
     pc = ProcessConfigs(base_config=config, hectometric=True)
     pc.process
     config = pc.update()
-    print("DATALOADER CONFIG:")
-    print(config["dataloader"])
-    print("DATA CONFIG:")
-    print(config["data"])
 
 
 if __name__ == "__main__":

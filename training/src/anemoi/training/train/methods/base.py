@@ -225,9 +225,11 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         self.updating_scalars = {}  # dict of dict of objects
         self.val_metric_ranges = {}  # dict of dict of lists
         self._scaling_values_log = {}  # dict of dict[str, float]
+        self.shard_sizes, self.grid_sizes = {}, {}
         self.loss = torch.nn.ModuleDict()
         self.metrics = torch.nn.ModuleDict()
-
+        
+        reader_group_size = self.config.dataloader.read_group_size
         dataset_variable_groups = get_multiple_datasets_config(self.config.training.variable_groups)
         loss_configs = get_multiple_datasets_config(config.training.training_loss)
         scalers_configs = get_multiple_datasets_config(config.training.scalers)
@@ -244,6 +246,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
             print("fused", fused)
             data_node_name = dataset_name if fused else DEFAULT_DATASET_NAME
             print("data node name", data_node_name)
+            graph = self._graph_data_dict[dataset_name]
 
             # Create dataset-specific metadata extractor
             metadata_extractor = ExtractVariableGroupAndLevel(
@@ -255,7 +258,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
                 scalers_configs[dataset_name],
                 data_indices=data_indices[dataset_name],
                 task=self.task,
-                graph_data=self._graph_data_dict[dataset_name],
+                graph_data=graph,
                 statistics=statistics[dataset_name],
                 statistics_tendencies=(
                     statistics_tendencies[dataset_name] if statistics_tendencies is not None else None
@@ -277,7 +280,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
                 loss_configs[dataset_name],
                 dataset_scalers,
                 data_indices[dataset_name],
-                graph_data=self._graph_data_dict[dataset_name],
+                graph_data=graph,
                 data_node_name=data_node_name,
             )
 
@@ -285,13 +288,20 @@ class BaseTrainingModule(pl.LightningModule, ABC):
                 val_metrics_configs[dataset_name],
                 scalers=dataset_scalers,
                 data_indices=data_indices[dataset_name],
-                graph_data=self._graph_data_dict[dataset_name],
+                graph_data=graph,
                 data_node_name=data_node_name,
             )
             self._scaling_values_log[dataset_name] = print_variable_scaling(
                 self.loss[dataset_name],
                 data_indices[dataset_name],
             )
+
+            self.grid_sizes[dataset_name] = graph["data"]["x"].shape[0]  # TODO(Mario): Replace by dataset.grid_size
+            self.shard_sizes[dataset_name] = get_balanced_partition_sizes(
+                self.grid_sizes[dataset_name],
+                reader_group_size,
+            )
+            del graph
 
         if config.training.loss_gradient_scaling:
             # Multi-dataset: register hook for each loss
@@ -310,17 +320,9 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         self.model_comm_group = None
         self.reader_groups = None
 
-        reader_group_size = self.config.dataloader.read_group_size
 
-        self.shard_sizes, self.grid_sizes = {}, {}
-        for dataset_name in self.dataset_names:
-            self.grid_sizes[dataset_name] = self._graph_data_dict[
-                dataset_name
-            ].num_nodes  # TODO(Mario): Replace by dataset.grid_size
-            self.shard_sizes[dataset_name] = get_balanced_partition_sizes(
-                self.grid_sizes[dataset_name],
-                reader_group_size,
-            )
+
+        
 
         self.grid_dim = -2
 
@@ -638,6 +640,7 @@ class BaseTrainingModule(pl.LightningModule, ABC):
         loss_kwargs = {
             "grid_shard_slice": grid_shard_slice,
             "group": self.model_comm_group,
+            "field_shape": self.trainer.datamodule.ds_train.field_shapes[dataset_name],
         }
         if pred_layout is not None:
             loss_kwargs["pred_layout"] = pred_layout

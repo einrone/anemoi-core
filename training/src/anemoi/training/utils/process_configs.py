@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 class ProcessConfigs:
     SENTINEL = object()
     TEMPORARY = defaultdict(dict)
-    DATATMP = defaultdict(dict)
+    TEMP = dict()
 
     def __init__(
         self,
@@ -31,7 +31,7 @@ class ProcessConfigs:
         self.struct = self.config
         self.struct_train = self.config["dataloader"]["hectometric_dataset_training"]
         self.struct_val = self.config["dataloader"]["hectometric_dataset_validation"]
-
+    
     def _findcutoutkeys(self, cutout, key, hecto_dirs) -> dict:
         """Recursively search through the cutout structure
         to find a specific key and duplicate the subdictionary with the keys dataset_names.
@@ -39,7 +39,7 @@ class ProcessConfigs:
         args:
             cutout (dict): The cutout configuration structure.
             key (str): The key to find.
-            dataset_names (list): The list of dataset names to include in the duplicated subdictionary.
+            hecto_dirs (dict): The dictionary of hectometric directories.
 
         Returns
         -------
@@ -47,15 +47,20 @@ class ProcessConfigs:
         """
 
         def recurse(obj):
+            
             if isinstance(obj, dict):
                 if key in obj and "data" in obj.get(key, {}):
                     template = deepcopy(obj[key]["data"])
-                    obj[key].pop("data")
-                    for k in hecto_dirs:
-                        obj[key].update({k: template})
-                        if "dataset_config" in obj[key][k]:
-                            self._findcutoutnulls(obj[key][k]["dataset_config"], {"dataset": hecto_dirs[k][0]})
-                            self._inject_date(obj[key][k], hecto_dirs[k][1], hecto_dirs[k][2])
+                    #obj[key].pop("data")
+                    for k, v in hecto_dirs.items():
+                        tmp = deepcopy(template)
+                        if "dataset_config" in tmp:
+                            self._findcutoutnulls(tmp["dataset_config"], {"dataset": v[0]})
+                            self._inject_date(tmp, v[1], v[2])
+                            obj[key][k] = tmp
+                        else:
+                            obj[key][k] = tmp
+                    obj[key].pop("data", None)  # Remove the original "data" key after processing
                 else:
                     # Otherwise, keep traversing deeper
                     for k, v in list(obj.items()):
@@ -65,13 +70,17 @@ class ProcessConfigs:
                 for i, item in enumerate(obj):
                     if isinstance(item, dict) and key in item and "data" in item.get(key, {}):
                         # Replace the entire element if it has dataset=None
-                        template = deepcopy(item[key]["data"])
-                        obj[i].pop(key)
-                        for k in hecto_dirs:
-                            obj[i][key].update({k: template})
-                            if "dataset_config" in obj[i][key][k]:
-                                self._findcutoutnulls(obj[i][key][k]["dataset_config"], {"dataset": hecto_dirs[k]})
-                                self._inject_date(obj[i][key][k])
+                        # obj[i].pop(key)
+                        template = deepcopy(obj[i][key]["data"])
+                        for k, v in hecto_dirs.items():
+                            tmp = deepcopy(item[key]["data"])
+                            if "dataset_config" in tmp:
+                                self._findcutoutnulls(tmp["dataset_config"], {"dataset": v[0]})
+                                self._inject_date(tmp, v[1], v[2])
+                                obj[i][key][k] = tmp
+                            else:
+                                obj[i][key][k] = tmp
+                        obj[i][key].pop("data", None)  # Remove the original "data" key after processing
                     else:
                         recurse(item)
 
@@ -124,11 +133,9 @@ class ProcessConfigs:
         """
         assert start is not None and end is not None, "Start and end dates must be provided."
         assert start <= end, "Start date must be less than or equal to end date."
-        print("struct before injecting date", struct)
 
         struct["start"] = start
         struct["end"] = end
-        print("struct after injecting date", struct)
 
         return struct
 
@@ -147,7 +154,7 @@ class ProcessConfigs:
 
         hecto_dirs = {}
         for lines in os.listdir(folder_path):
-            print(f"Processing file: {lines}")
+            # print(f"Processing file: {lines}")
             filename = lines.strip("\n")
             key = filename.split(".")[0]
 
@@ -156,7 +163,7 @@ class ProcessConfigs:
             start, end = splitted[1:3]
             start = f"{start[:4]}-{start[4:6]}-{start[6:8]}"
             end = f"{end[:4]}-{end[4:6]}-{end[6:8]}"
-            print(filename)
+            # print(filename)
             directory = base_path + filename
             hecto_dirs[key] = (directory, start, end)
         return hecto_dirs
@@ -170,13 +177,14 @@ class ProcessConfigs:
                 filename = lines.strip("\n")
                 key = filename.split(".")[0]
                 splitted = lines.split("_")
+                # if lines.endswith("v2.zarr"):
+                # end = splitted[-1].split("-")[0]
+                # start = splitted[-2]
+                # else:
                 start, end = splitted[1:3]
                 start = f"{start[:4]}-{start[4:6]}-{start[6:8]}"
                 end = f"{end[:4]}-{end[4:6]}-{end[6:8]}"
                 directory = base_path + filename
-                print("directory", directory)
-                print("start", start)
-                print("end", end)
                 hecto_dirs[key] = (directory, start, end)
             return hecto_dirs
 
@@ -191,24 +199,27 @@ class ProcessConfigs:
 
         """
         hecto_dirs_train = self.process_text_file_hecto(self.struct_train)
-        self.config = self._findcutoutkeys(self.config, "datasets", hecto_dirs_train)
+        # print("hecto_dirs_train", hecto_dirs_train)
+        self.config = self._findcutoutkeys(self.config, "datasets", hecto_dirs_train) #FILLS UP SELF.TEMP
         dataset_names = list(hecto_dirs_train.keys())
         self.config["model"]["encoders"]["multi-domain"]["datasets"] = dataset_names
         self.config["model"]["decoders"]["multi-domain"]["datasets"] = dataset_names
-        print("Config after preprocessing", self.config["model"]["encoders"])
+        # print("Config after preprocessing", self.config)
+        # print("DATALOADER CONFIG:")
+        # print(self.config["dataloader"]["training"]["datasets"])
         return OmegaConf.create(self.config)
 
 
 @hydra.main(
     version_base=None,
-    config_path="/leonardo_work/DestE_340_26/users/sbuurman/MD-PR/forked_PR/anemoi-core/training/src/anemoi/training/config/",
+    config_path="/pfs/lustrep4/scratch/project_465000527/buurmans/DE_330_WP14/Anemoi/MD-PR/anemoi-core/training/src/anemoi/training/config",
     config_name="graph_from_file.yaml",
 )
 def main(config: DictConfig) -> None:
     pc = ProcessConfigs(base_config=config, hectometric=True)
     # pc.process
     config = pc.update()
-    print("config after processing", config)
+    # print("config after processing", config)
     # print("DATALOADER CONFIG:")
     # print(config["dataloader"])
     # print("DATA CONFIG:")

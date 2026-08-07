@@ -141,12 +141,11 @@ class FFT2D(SpectralTransform):
     def forward(
         self,
         data: torch.Tensor,
+        field_shape: tuple[int, int] | None = None,
     ) -> torch.Tensor:
+        self.x_dim, self.y_dim = field_shape if field_shape is not None else (self.x_dim, self.y_dim)
         data = torch.index_select(data, -2, torch.arange(*self.nodes_slice.indices(data.size(-2)), device=data.device))
-        print("data shape", data.shape)
-        var = data.shape[-1]
-        print(f"x dimension: {self.x_dim}, y dimension: {self.y_dim}")
-        print(data.shape)
+        var = data.shape[-1] 
         try:
             data = einops.rearrange(data, "... (y x) v -> ... y x v", x=self.x_dim, y=self.y_dim, v=var)
         except Exception as e:
@@ -156,7 +155,7 @@ class FFT2D(SpectralTransform):
             ) from e
 
         if self.patch_size is None:
-            fft = torch.fft.fft2(data, dim=(-2, -3))
+            fft = torch.fft.fft2(data, dim=(-2, -3), norm="forward")
             if self.apply_filter:
                 fft *= self.filter.to(device=data.device, dtype=data.dtype)
             return fft
@@ -173,7 +172,7 @@ class FFT2D(SpectralTransform):
         unfolded = F.unfold(flat, kernel_size=(patch_y, patch_x), stride=(stride_y, stride_x))
         n_patches = unfolded.shape[-1]
         patches = unfolded.transpose(1, 2).reshape(-1, n_patches, var, patch_y, patch_x)
-        fft = torch.fft.fft2(patches, dim=(-2, -1))
+        fft = torch.fft.fft2(patches, dim=(-2, -1), norm="forward")
 
         padded_y = self.y_dim + self.patch_pad_y
         padded_x = self.x_dim + self.patch_pad_x

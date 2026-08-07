@@ -167,6 +167,7 @@ class BaseGraphModel(nn.Module):
             self.output_dim[dataset_name] = self._calculate_output_dim(dataset_name)
 
     def _calculate_input_dim(self, dataset_name: str) -> int:
+        print(f"dataset {dataset_name} has {self.n_step_input} input steps times {self.num_input_channels[dataset_name]} input channels plus {self.node_attributes.attr_ndims[dataset_name]} node attribute dimensions")
         return self.n_step_input * self.num_input_channels[dataset_name] + self.node_attributes.attr_ndims[dataset_name]
 
     def _calculate_input_dim_latent(self, dataset_name) -> int:
@@ -303,6 +304,7 @@ class BaseGraphModel(nn.Module):
         node_attributes_graph = HeteroData()
         for dataset_name in self.dataset_names:
             # I think my graphs have an old definition where the dataset name is not the same
+            graph = self._graph_data_dict[dataset_name]
             node_attributes_graph[dataset_name].x = self._graph_data_dict[dataset_name]["data"].x
             node_attributes_graph[dataset_name].num_nodes = len(self._graph_data_dict[dataset_name]["data"].x)
             node_attributes_graph[self._graph_name_hidden + "_" + dataset_name].x = self._graph_data_dict[dataset_name][
@@ -311,6 +313,7 @@ class BaseGraphModel(nn.Module):
             node_attributes_graph[self._graph_name_hidden + "_" + dataset_name].num_nodes = len(
                 self._graph_data_dict[dataset_name][self._graph_name_hidden].x
             )
+            del graph
 
         # It seems that the processor is assumed to be common for multi-dataset graphs
         # Is the encoder/decoder only provided in the .pt files usually?

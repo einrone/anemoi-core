@@ -271,7 +271,6 @@ class AnemoiModelEncProcDec(BaseGraphModel):
             Output of the model, with the same shape as the input (sharded if input is sharded)
         """
         dataset_names = list(x.keys())
-        print("dataset names", dataset_names)
 
         # Extract and validate batch & ensemble sizes across datasets
         batch_size = self._get_consistent_dim(x, 0)

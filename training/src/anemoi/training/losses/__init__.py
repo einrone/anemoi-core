@@ -9,6 +9,7 @@
 
 from .aggregate import TimeAggregateLossWrapper
 from .combined import CombinedLoss
+from .fft import AFCRPSFFTLossNew
 from .huber import HuberLoss
 from .kcrps import CRPS
 from .logcosh import LogCoshLoss
@@ -44,5 +45,6 @@ __all__ = [
     "SpectralL2Loss",
     "TimeAggregateLossWrapper",
     "WeightedMSELoss",
+    "AFCRPSFFTLossNew",
     "get_loss_function",
 ]

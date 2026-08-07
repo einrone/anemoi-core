@@ -169,8 +169,11 @@ class CRPS(BaseLoss):
         grid_shard_slice: slice | None = None,
         group: ProcessGroup | None = None,
         squash_mode: Squash_mode = "sum",
+        field_shape: tuple[int, int] | None = None,
     ) -> torch.Tensor:
         is_sharded = grid_shard_slice is not None
+        if field_shape is not None:
+            self.x_dim, self.y_dim = field_shape
 
         if self.ignore_nans:
             y_pred, y_target = self.mask_nans(y_pred, y_target)
@@ -186,7 +189,6 @@ class CRPS(BaseLoss):
 
         crps = einops.rearrange(crps, "bs t v latlon -> bs t 1 latlon v")
         crps = self.scale(crps, scaler_indices, without_scalers=without_scalers, grid_shard_slice=grid_shard_slice)
-        print("KCRPS contribution", self.reduce(crps, squash=squash, squash_mode=squash_mode, group=group if is_sharded else None))
         return self.reduce(crps, squash=squash, squash_mode=squash_mode, group=group if is_sharded else None)
 
     @property

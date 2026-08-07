@@ -579,7 +579,8 @@ class ScaleTensor(nn.Module):
 
             reshaped_scaler = scaler.reshape(reshape)
             reshaped_scaler = torch.moveaxis(reshaped_scaler, list(range(ndim)), (*missing_dims, *dims))
-
+            print("reshaped_scaler", reshaped_scaler.shape)
+            print("x", x.shape)
             reshaped_scaler = reshaped_scaler.expand_as(x)
 
             if subset_indices is not None:
