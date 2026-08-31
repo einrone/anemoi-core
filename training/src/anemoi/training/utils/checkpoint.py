@@ -124,13 +124,27 @@ def transfer_learning_loading(model: torch.nn.Module, ckpt_path: Path | str) -> 
             key_ckpt = key.replace(key[27] + ".blocks.1", new_number)
             print(f"replacing {key} with {key_ckpt}")
             state_dict[key_ckpt] = state_dict.pop(key)
+        if "node_dst_mlp." in key and not "multi-domain" in key:
+            key_ckpt = key.replace("node_dst_mlp.", "node_dst_mlp.mlp.")
+            state_dict[key_ckpt] = state_dict.pop(key)
+            print(f"replacing {key} with {key_ckpt}")
         if key in model_state_dict and state_dict[key].shape != model_state_dict[key].shape:
             LOGGER.info("Skipping loading parameter: %s", key)
             LOGGER.info("Checkpoint shape: %s", str(state_dict[key].shape))
             LOGGER.info("Model shape: %s", str(model_state_dict[key].shape))
 
             del state_dict[key]  # Remove the mismatched key
-
+    
+    for key in state_dict.copy():
+        if key not in model_state_dict:
+            print("key in checkpoint but not in model", key)
+    
+    for key in model_state_dict:
+        if key not in state_dict:
+            print("key in model but not in checkpoint", key)
+        
+    # state_dict["model.model.encoder.multi-domain.emb_nodes_src.weight"] = state_dict.pop("model.model.encoder.emb_nodes_src.weight")
+    # state_dict["model.model.decoder.multi-domain.emb_nodes_src.weight"] = state_dict.pop("model.model.decoder.emb_nodes_src.weight")
     # Load the filtered state_dict into the model
     model.load_state_dict(state_dict, strict=False)
 

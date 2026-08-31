@@ -306,12 +306,13 @@ class AnemoiTrainer(ABC):
         ignored_datasets = [name for name in model._ckpt_model_name_to_index if name not in self.data_indices]
         if ignored_datasets:
             for ignored_dataset in ignored_datasets:
-                LOGGER.warning(
-                    "Dataset '%s' found in checkpoint but NOT in config. "
-                    "Encoder & decoder weights for '%s' will be ignored.",
-                    ignored_dataset,
-                    ignored_dataset,
-                )
+                # LOGGER.warning(
+                #     "Dataset '%s' found in checkpoint but NOT in config. "
+                #     "Encoder & decoder weights for '%s' will be ignored.",
+                #     ignored_dataset,
+                #     ignored_dataset,
+                # )
+                loaded_datasets.append(ignored_dataset)
 
         # Log summary of what was loaded
         if loaded_datasets:

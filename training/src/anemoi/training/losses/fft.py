@@ -356,7 +356,7 @@ class AFCRPSFFTLossNew(CRPS):
 
         batch_size = y_pred.shape[0]
 
-        y_pred_regional = y_pred[:, :, :, :self.len_reg, :].squeeze(1)e}")
+        y_pred_regional = y_pred[:, :, :, :self.len_reg, :].squeeze(1)
         y_target_regional = y_target[:, :, :self.len_reg, :].squeeze(1)
 
         y_pred_regional = einops.rearrange(

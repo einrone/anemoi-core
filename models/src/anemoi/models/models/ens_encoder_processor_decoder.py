@@ -108,11 +108,15 @@ class AnemoiEnsModelEncProcDec(AnemoiModelEncProcDec):
         )
 
         if self.condition_on_residual:
-            x_skip_cond = x_skip[:, 0] if x_skip.ndim == 5 else x_skip
+            # x_skip_cond = x_skip[:, 0] if x_skip.ndim == 5 else x_skip
+            print("shape residual connection", x_skip.shape)
+            print("x_data_latent", x_data_latent.shape)
+            x_skip = x_skip[..., self._internal_input_idx[dataset_name]]
+            print("x_skip only prognstic vars", x_skip)
             x_data_latent = torch.cat(
                 (
                     x_data_latent,
-                    einops.rearrange(x_skip_cond, "bse grid vars -> (bse grid) vars"),
+                    einops.rearrange(x_skip, "b t e grid vars -> (b t e grid) vars"),
                 ),
                 dim=-1,
             )
